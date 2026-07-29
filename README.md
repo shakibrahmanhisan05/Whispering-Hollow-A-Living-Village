@@ -17,6 +17,7 @@ generated at runtime from code. There is not a single `.png`, `.glb` or `.mp3` i
 - [Project structure](#project-structure)
 - [Architecture notes](#architecture-notes)
 - [Firebase setup](#firebase-setup) *(optional)*
+- **[SETUP.md](./SETUP.md) — step-by-step setup guide**
 - [Deploying](#deploying)
 - [Performance](#performance)
 - [Accessibility](#accessibility)
