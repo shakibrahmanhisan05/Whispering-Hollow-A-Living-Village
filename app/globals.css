@@ -1,0 +1,262 @@
+@import 'tailwindcss';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WHISPERING HOLLOW — DESIGN TOKENS
+   A warm, dusk-lit palette. Everything reads like late afternoon light on
+   dry grass: amber, moss, faded denim sky, deep pine shadow.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* Core surfaces — deep, desaturated pine/charcoal so the 3D scene stays hero */
+  --color-hollow-void: #070a09;
+  --color-hollow-950: #0c110f;
+  --color-hollow-900: #121a17;
+  --color-hollow-850: #18211d;
+  --color-hollow-800: #1f2a25;
+  --color-hollow-700: #2c3a33;
+  --color-hollow-600: #3e4f46;
+  --color-hollow-500: #596e63;
+  --color-hollow-400: #7d9488;
+  --color-hollow-300: #a6bab0;
+  --color-hollow-200: #cadbd3;
+  --color-hollow-100: #e6efe9;
+
+  /* Amber — the golden-hour accent, used for focus, primary actions, unlocks */
+  --color-amber-glow: #ffb457;
+  --color-amber-deep: #d98b2b;
+  --color-amber-soft: #ffd9a0;
+  --color-amber-ember: #ff8a3d;
+
+  /* Secondary accents */
+  --color-dusk-violet: #8f80b8;
+  --color-brook-teal: #6fbfae;
+  --color-poppy: #e2593f;
+  --color-wheat: #e8cf8a;
+
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
+  --font-body:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Menlo, monospace;
+
+  --radius-panel: 1.15rem;
+
+  --shadow-glass:
+    0 1px 0 0 rgb(255 255 255 / 0.08) inset, 0 -1px 0 0 rgb(0 0 0 / 0.25) inset,
+    0 24px 60px -12px rgb(0 0 0 / 0.65);
+  --shadow-lift: 0 12px 32px -8px rgb(0 0 0 / 0.55);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BASE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  :root {
+    /* Driven at runtime by the accessibility UI-scale slider. */
+    --ui-scale: 1;
+    color-scheme: dark;
+  }
+
+  * {
+    border-color: color-mix(in oklab, var(--color-hollow-600) 40%, transparent);
+  }
+
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: var(--color-hollow-950);
+    color: var(--color-hollow-100);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+  }
+
+  body {
+    /* The canvas owns the viewport; nothing should ever scroll the document. */
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-amber-glow) 45%, transparent);
+    color: #fff;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-amber-glow);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Scrollbars inside panels */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-hollow-500) 55%, transparent);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-hollow-400) 70%, transparent);
+    background-clip: content-box;
+  }
+
+  canvas {
+    display: block;
+    touch-action: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COMPONENT UTILITIES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@layer components {
+  /* The frosted panel look shared by every menu surface. */
+  .glass {
+    background: linear-gradient(
+      150deg,
+      color-mix(in oklab, var(--color-hollow-850) 82%, transparent),
+      color-mix(in oklab, var(--color-hollow-950) 88%, transparent)
+    );
+    backdrop-filter: blur(20px) saturate(1.25);
+    -webkit-backdrop-filter: blur(20px) saturate(1.25);
+    border: 1px solid color-mix(in oklab, var(--color-hollow-100) 12%, transparent);
+    box-shadow: var(--shadow-glass);
+  }
+
+  .glass-subtle {
+    background: color-mix(in oklab, var(--color-hollow-900) 55%, transparent);
+    backdrop-filter: blur(12px) saturate(1.1);
+    -webkit-backdrop-filter: blur(12px) saturate(1.1);
+    border: 1px solid color-mix(in oklab, var(--color-hollow-100) 8%, transparent);
+  }
+
+  /* Warm rim-light that makes primary actions feel lit from within. */
+  .amber-glow {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-amber-glow) 45%, transparent),
+      0 0 24px -4px color-mix(in oklab, var(--color-amber-glow) 55%, transparent);
+  }
+
+  .text-shadow-soft {
+    text-shadow: 0 2px 12px rgb(0 0 0 / 0.75);
+  }
+
+  /* Applied to the <html> element when High Contrast HUD is enabled. */
+  .hud-high-contrast .glass,
+  .hud-high-contrast .glass-subtle {
+    background: rgb(4 8 6 / 0.94) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-color: #fff !important;
+  }
+  .hud-high-contrast {
+    --color-hollow-300: #ffffff;
+    --color-hollow-400: #ffffff;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANIMATION
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes wh-drift {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(14px, -18px, 0) rotate(8deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes wh-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes wh-sweep {
+  0% {
+    background-position: -220% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+
+@keyframes wh-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-drift {
+  animation: wh-drift 9s var(--ease-in-out-soft) infinite;
+}
+.animate-breathe {
+  animation: wh-breathe 3.4s var(--ease-in-out-soft) infinite;
+}
+.animate-fade-up {
+  animation: wh-fade-up 0.5s var(--ease-out-soft) both;
+}
+
+/* Loading-bar shimmer */
+.shimmer {
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in oklab, var(--color-amber-soft) 55%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 220% 100%;
+  animation: wh-sweep 1.9s linear infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   REDUCED MOTION
+   Honour both the OS preference and the in-game accessibility toggle.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}

@@ -1,0 +1,96 @@
+rules_version = '2';
+
+/**
+ * Whispering Hollow — Firestore security rules.
+ *
+ * Principles:
+ *   1. A user may only ever write their own document.
+ *   2. Screenshot metadata is readable by anyone only when explicitly marked
+ *      public; otherwise only by its owner.
+ *   3. Nothing is writable by an unauthenticated client.
+ *   4. Field-level validation on the paths that matter, so a compromised client
+ *      cannot award itself ten thousand coins.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    /** Guards against absurd values arriving from a tampered client. */
+    function plausibleProgress() {
+      let data = request.resource.data;
+      return (!('coins' in data) || (data.coins is int && data.coins >= 0 && data.coins <= 100000))
+        && (!('trainsSeen' in data) || (data.trainsSeen is int && data.trainsSeen >= 0));
+    }
+
+    // ── users/{uid} ────────────────────────────────────────────────────────
+    // Profile, settings, progression, saved worlds.
+    match /users/{uid} {
+      allow read:   if isOwner(uid);
+      allow create: if isOwner(uid) && plausibleProgress();
+      allow update: if isOwner(uid) && plausibleProgress();
+      allow delete: if isOwner(uid);
+
+      // Any future subcollections inherit the same ownership rule.
+      match /{document=**} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // ── screenshots/{id} ───────────────────────────────────────────────────
+    match /screenshots/{screenshotId} {
+      // Public shots are world-readable; private ones only by their owner.
+      allow read: if resource.data.isPublic == true
+                  || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+
+      // The ownerUid on a new document must be the caller — you cannot create
+      // a screenshot attributed to someone else.
+      allow create: if isSignedIn()
+                    && request.resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.keys().hasAll(['ownerUid', 'publicUrl', 'capturedAt'])
+                    && request.resource.data.isPublic is bool;
+
+      // Owners may edit their own, but may not reassign ownership.
+      allow update: if isSignedIn()
+                    && resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.ownerUid == resource.data.ownerUid;
+
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // ── worlds/{id} ────────────────────────────────────────────────────────
+    // Public world instances people can join.
+    match /worlds/{worldId} {
+      allow read: if resource.data.isPublic == true || isSignedIn();
+
+      allow create: if isSignedIn()
+                    && request.resource.data.hostUid == request.auth.uid
+                    && request.resource.data.seed is string
+                    && request.resource.data.seed.size() <= 64;
+
+      // Only the host may modify or remove a world instance.
+      allow update, delete: if isSignedIn() && resource.data.hostUid == request.auth.uid;
+    }
+
+    // ── Seeded reference data ──────────────────────────────────────────────
+    // Achievement and lore definitions, written by scripts/seed.ts using the
+    // Admin SDK (which bypasses these rules entirely). Read-only to clients.
+    match /gameData/{document=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Default deny ───────────────────────────────────────────────────────
+    // Anything not matched above is inaccessible. Keep this last.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

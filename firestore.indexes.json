@@ -1,0 +1,43 @@
+{
+  "//": [
+    "Composite indexes required by the queries in lib/firestore.ts.",
+    "",
+    "Firestore can serve single-field queries from its automatic indexes, but",
+    "any query combining a filter and an order-by on different fields needs an",
+    "explicit composite index. Both queries below do exactly that.",
+    "",
+    "Deploy with: firebase deploy --only firestore:indexes"
+  ],
+
+  "indexes": [
+    {
+      "//": "loadUserScreenshots(): where('ownerUid','==',uid).orderBy('capturedAt','desc')",
+      "collectionGroup": "screenshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "capturedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "//": "Public gallery browsing: where('isPublic','==',true).orderBy('capturedAt','desc')",
+      "collectionGroup": "screenshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isPublic", "order": "ASCENDING" },
+        { "fieldPath": "capturedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "//": "listPublicWorlds(): where('isPublic','==',true).orderBy('createdAt','desc')",
+      "collectionGroup": "worlds",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isPublic", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+
+  "fieldOverrides": []
+}

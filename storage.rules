@@ -1,0 +1,37 @@
+rules_version = '2';
+
+/**
+ * Whispering Hollow — Cloud Storage security rules.
+ *
+ * Screenshots live at `screenshots/{uid}/{filename}`. Because the owning UID is
+ * a path segment, ownership can be checked without a Firestore lookup — which
+ * keeps uploads fast and the rules cheap to evaluate.
+ */
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    match /screenshots/{uid}/{filename} {
+
+      /* Reads are open. Screenshot URLs are unguessable download tokens, and
+       * the sharing feature depends on a link working for someone who is not
+       * signed in. If you would rather lock this down, change to:
+       *   allow read: if request.auth != null && request.auth.uid == uid;
+       * — sharing will then only work between signed-in players. */
+      allow read: if true;
+
+      allow write: if request.auth != null
+                   && request.auth.uid == uid
+                   // 8 MB ceiling — a 4K JPEG at quality 0.92 is well under this.
+                   && request.resource.size < 8 * 1024 * 1024
+                   // Images only. Without this the bucket is free file hosting.
+                   && request.resource.contentType.matches('image/(jpeg|png|webp)');
+
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Default deny for every other path.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

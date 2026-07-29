@@ -1,0 +1,5 @@
+.next
+node_modules
+public/sw.js
+public/icons
+package-lock.json

@@ -1,0 +1,70 @@
+{
+  "//": [
+    "Whispering Hollow — Realtime Database rules (multiplayer presence).",
+    "",
+    "Presence is ephemeral and low-stakes, but it is still writable by any",
+    "signed-in client, so the rules enforce three things:",
+    "  1. You may only write your own node, keyed by your UID.",
+    "  2. Every field is type- and range-validated, so a malicious client",
+    "     cannot inject a 10 MB display name or teleport to (1e9, 1e9).",
+    "  3. lastSeen must be the server timestamp, which makes the staleness",
+    "     sweep trustworthy — a client cannot claim to be fresh forever.",
+    "",
+    "The .indexOn on lastSeen supports querying out stale entries."
+  ],
+
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "worldPresence": {
+      "$worldId": {
+        "players": {
+          ".read": "auth != null",
+          ".indexOn": ["lastSeen"],
+
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+
+            ".validate": "newData.hasChildren(['x', 'y', 'z', 'rotY', 'lastSeen'])",
+
+            "displayName": {
+              ".validate": "newData.isString() && newData.val().length <= 48"
+            },
+            "x": {
+              ".validate": "newData.isNumber() && newData.val() >= -500 && newData.val() <= 500"
+            },
+            "y": {
+              ".validate": "newData.isNumber() && newData.val() >= -100 && newData.val() <= 400"
+            },
+            "z": {
+              ".validate": "newData.isNumber() && newData.val() >= -500 && newData.val() <= 500"
+            },
+            "rotY": {
+              ".validate": "newData.isNumber() && newData.val() >= -10 && newData.val() <= 10"
+            },
+            "emote": {
+              ".validate": "newData.isString() && newData.val().length <= 16 || newData.val() == null"
+            },
+            "emoteAt": {
+              ".validate": "newData.isNumber()"
+            },
+            "avatarColor": {
+              ".validate": "newData.isString() && newData.val().matches(/^#[0-9a-fA-F]{6}$/)"
+            },
+            "lantern": {
+              ".validate": "newData.isBoolean()"
+            },
+            "lastSeen": {
+              ".validate": "newData.val() == now"
+            },
+
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
