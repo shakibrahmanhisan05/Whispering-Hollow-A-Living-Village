@@ -338,11 +338,11 @@ export function Locomotive({ wheelAngle, effort, speed }: LocomotiveProps) {
      * The train spends most of its life hidden. Ancestor visibility is the
      * honest test — the director hides the whole consist in one go, so this
      * component's own `visible` flag says nothing. */
-    const body = bodyRef.current;
-    if (!body) return;
+    const loco = bodyRef.current;
+    if (!loco) return;
 
-    let onStage = body.visible;
-    body.traverseAncestors((o) => {
+    let onStage = loco.visible;
+    loco.traverseAncestors((o) => {
       if (!o.visible) onStage = false;
     });
 
@@ -352,11 +352,11 @@ export function Locomotive({ wheelAngle, effort, speed }: LocomotiveProps) {
       return;
     }
 
-    body.localToWorld(firebox.position.set(0, 1.8, -L * 0.28));
+    loco.localToWorld(firebox.position.set(0, 1.8, -L * 0.28));
     firebox.intensity = 3.5;
 
-    body.localToWorld(spotSlot.position.set(0, 2.9, L * 0.5));
-    body.localToWorld(spotSlot.target.set(0, 0, L * 0.5 + 40));
+    loco.localToWorld(spotSlot.position.set(0, 2.9, L * 0.5));
+    loco.localToWorld(spotSlot.target.set(0, 0, L * 0.5 + 40));
     spotSlot.intensity = night * 42;
   });
 
@@ -753,6 +753,25 @@ export function Wagon({ type, livery, wheelAngle, index }: WagonProps) {
   const lighting = useLighting();
   const wheels = useRef<THREE.Group[]>([]);
   const lanternMat = useRef<THREE.MeshStandardMaterial>(null);
+  const bodyRef = useRef<THREE.Group>(null);
+
+  /* Only the mail car carries a lamp, and it takes a slot in the shared pool
+   * for the same reason as everything else on this train — see
+   * `components/scene/LightPool`. */
+  const lantern = useMemo<PointLightSource>(
+    () => ({
+      position: new THREE.Vector3(),
+      color: new THREE.Color('#ffb45a'),
+      intensity: 0,
+      distance: 7,
+      decay: 2,
+    }),
+    [],
+  );
+  useEffect(() => {
+    if (type !== 'mail') return;
+    return registerPointLight(lantern);
+  }, [lantern, type]);
 
   const colors = useMemo(
     () => WAGON_LIVERIES.find((l) => l.id === livery) ?? WAGON_LIVERIES[0],
@@ -984,10 +1003,25 @@ export function Wagon({ type, livery, wheelAngle, index }: WagonProps) {
     if (lanternMat.current) {
       lanternMat.current.emissiveIntensity = 1.4 + lighting.lampIntensity * 1.8;
     }
+
+    const car = bodyRef.current;
+    if (type !== 'mail' || !car) return;
+
+    let onStage = car.visible;
+    car.traverseAncestors((o) => {
+      if (!o.visible) onStage = false;
+    });
+
+    if (!onStage) {
+      lantern.intensity = 0;
+      return;
+    }
+    car.localToWorld(lantern.position.set(1.42, 2.6, -TRAIN.WAGON_LENGTH * 0.42));
+    lantern.intensity = 3;
   });
 
   return (
-    <group name={`wagon-${index}-${type}`}>
+    <group ref={bodyRef} name={`wagon-${index}-${type}`}>
       <mesh geometry={geometry} material={materials.body} castShadow receiveShadow />
       <mesh geometry={trimGeometry} material={materials.trim} castShadow />
       {windowGeo && <mesh geometry={windowGeo} material={materials.window} />}
@@ -1032,7 +1066,6 @@ export function Wagon({ type, livery, wheelAngle, index }: WagonProps) {
               emissiveIntensity={1.6}
             />
           </mesh>
-          <pointLight color="#ffb45a" intensity={3} distance={7} decay={2} />
         </group>
       )}
     </group>

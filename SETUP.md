@@ -482,12 +482,39 @@ Multiplayer is the only thing with real scaling cost. It's off by default
 ## Verification already done
 
 The game was driven end to end in a real Chrome browser with GPU acceleration, roaming every
-screen and panel: **44 of 44 steps clean, zero console errors.**
+screen and panel: **44 of 44 steps clean, zero console errors** — in `npm run dev` *and* against
+a production build.
 
-That process found and fixed seven bugs a build alone would never have caught — including
+That process found and fixed a long list of bugs a build alone would never have caught —
 metre-wide grass blades, GPU memory exhaustion when switching graphics presets, pointer-lock
-loss force-opening the Settings menu, an unrendered character panel, and photo mode holding the
-cursor so its own buttons couldn't be clicked.
+loss force-opening the Settings menu, an unrendered character panel, photo mode holding the
+cursor so its own buttons couldn't be clicked, and the crash that stopped the game loading at
+all (the Cinematic preset asked for 1.5× the particles a buffer had been allocated for, so
+`setColorAt` read past the end of the colour array and threw inside a `useEffect`, which
+unmounted the whole React tree).
 
-Static gates all pass too: `tsc --noEmit` (0 errors), `eslint` (0 problems), `npm run verify`
-(29/29 checks), `next build` (164 kB first-load JS).
+Static gates all pass too: `tsc --noEmit` (0 errors), `eslint --max-warnings 0` (0 problems),
+`npm run verify` (29/29 checks), `next build` (164 kB first-load JS).
+
+### Performance
+
+Measured at 1280×720 on the **High** preset while walking and turning:
+
+| | avg | p95 | p99 | worst frame | frames > 25 ms |
+|---|---|---|---|---|---|
+| **Now** | **60.0 fps** | 17.1 ms | 17.4 ms | **17.6 ms** | **0** |
+| Before | 34.2 fps | 33.3 ms | 83.3 ms | 1 900 ms | 5.8 % |
+
+Same numbers in dev and in production. The two changes that account for most of that are
+documented under **Performance** in `README.md` — worth reading before you touch the render
+path, because both are easy to reintroduce by accident:
+
+1. **Never show or hide a light.** three.js recompiles every material in the scene when the
+   light count changes. All lamps share the pool in `components/scene/LightPool.tsx`.
+2. **Never let `<PostProcessing>`'s subtree re-render on a timer.** `<EffectComposer>` rebuilds
+   its whole pass chain — new shaders, new render targets — whenever its children array changes
+   identity.
+
+Read `window.__whStats` in the browser console at any time for live FPS, draw calls, triangles,
+geometries, textures, shader programs and light count — it is refreshed twice a second. If
+`lights` ever changes while you play, or `programs` keeps climbing, something has regressed.

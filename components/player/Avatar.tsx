@@ -21,6 +21,7 @@ import * as THREE from 'three';
 import { playerState } from './PlayerController';
 import { useGameStore } from '@/store/gameStore';
 import { useWindField } from '@/hooks/useWind';
+import { registerPointLight, type PointLightSource } from '../scene/LightPool';
 import { mergeGeometries, transformGeometry } from '@/lib/geometry/merge';
 import { AVATAR, PLAYER, MULTIPLAYER, type AvatarConfig, type EmoteId } from '@/config/game';
 import { clamp, damp, lerp } from '@/lib/utils/math';
@@ -340,6 +341,21 @@ export function Avatar({
   const headRef = useRef<THREE.Group>(null);
   const lanternRef = useRef<THREE.Group>(null);
 
+  const lanternLight = useMemo<PointLightSource>(
+    () => ({
+      position: new THREE.Vector3(),
+      color: new THREE.Color(AVATAR.LANTERN.color),
+      intensity: 0,
+      distance: AVATAR.LANTERN.distance,
+      decay: 2,
+    }),
+    [],
+  );
+  useEffect(() => {
+    if (ghost) return;
+    return registerPointLight(lanternLight);
+  }, [lanternLight, ghost]);
+
   /** Cycle phase, advanced by distance travelled rather than by time. */
   const cyclePhase = useRef(0);
   const lastPos = useRef(new THREE.Vector3());
@@ -505,6 +521,17 @@ export function Avatar({
         Math.sin(cyclePhase.current - 0.7) * swingAmp + Math.sin(t * 1.3) * wind.strength * 0.06;
       lanternRef.current.rotation.x = Math.sin(cyclePhase.current * 0.5 - 0.4) * swingAmp * 0.6;
     }
+
+    /* The lantern's light comes from the shared pool. Mounting a real one here
+     * would mean the scene's light count changed every time the player toggled
+     * their lantern or switched to first person — and each change recompiles
+     * every shader in the world. See `components/scene/LightPool`. */
+    if (!ghost && config.lantern && lanternRef.current) {
+      lanternRef.current.localToWorld(lanternLight.position.set(0, -0.26, 0));
+      lanternLight.intensity = AVATAR.LANTERN.intensity;
+    } else {
+      lanternLight.intensity = 0;
+    }
   });
 
   const M = materials;
@@ -559,16 +586,6 @@ export function Avatar({
                   emissiveIntensity={2.4}
                 />
               </mesh>
-              {!ghost && (
-                <pointLight
-                  position={[0, -0.26, 0]}
-                  color={AVATAR.LANTERN.color}
-                  intensity={AVATAR.LANTERN.intensity}
-                  distance={AVATAR.LANTERN.distance}
-                  decay={2}
-                  castShadow={false}
-                />
-              )}
             </group>
           )}
         </group>

@@ -148,6 +148,11 @@ export function AdaptiveQuality() {
        * assignment twice a second and makes the frame budget inspectable from
        * the console or an automated performance run — which is the difference
        * between optimising from measurements and optimising from guesses. */
+      /* Lights are counted because the count is a *correctness* signal, not
+       * just a statistic: three keys its shader program cache on it, so any
+       * light appearing or disappearing recompiles every material in the
+       * scene. If this number ever moves during play, something has
+       * regressed — see `components/scene/LightPool`. */
       let lights = 0;
       scene.traverseVisible((o) => {
         if ((o as THREE.Light).isLight) lights++;

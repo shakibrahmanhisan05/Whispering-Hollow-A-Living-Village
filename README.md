@@ -349,7 +349,15 @@ fail on it.
 
 ## Performance
 
-Targets 60 FPS on an M1 / GTX 1650 / Iris Xe, and 30+ on modern mobile.
+Measured at 1280×720 on the **High** preset, walking through the village with the camera
+turning — the worst case for streaming and LOD churn:
+
+| | avg | p50 | p95 | p99 | worst frame | frames > 25 ms |
+|---|---|---|---|---|---|---|
+| **Now** | **60.0 fps** | 16.7 ms | 17.1 ms | 17.4 ms | **17.6 ms** | **0** |
+| Before optimisation | 34.2 fps | 16.7 ms | 33.3 ms | 83.3 ms | 1 900 ms | 5.8 % |
+
+Identical numbers in `next dev` and in a production build.
 
 - **164 kB first-load JS.** The entire 3D engine is code-split behind a dynamic import, so the
   menu loads before any of it is fetched.
@@ -357,13 +365,48 @@ Targets 60 FPS on an M1 / GTX 1650 / Iris Xe, and 30+ on modern mobile.
 - Trees use three LOD tiers with a **round-robin update** — a slice of the instance list is
   re-evaluated each frame rather than all 420.
 - Grass is **chunked and recycled**: crossing a chunk boundary re-fills the buffers that just
-  went out of range rather than allocating new ones, so walking never triggers GC.
+  went out of range rather than allocating new ones, so walking never triggers GC. Chunk fills
+  are queued at two per frame so a boundary crossing can never land seventeen of them in one.
 - Cloud drift, reflection probes and distant wildlife run on throttles (10–15 Hz).
 - **Adaptive quality** steps the preset down after sustained low FPS and back up when there's
-  headroom, with enough hysteresis that it never oscillates.
+  headroom, with enough hysteresis that it never oscillates. It ignores the first eight seconds,
+  which are always the worst frames a scene will ever produce.
 
 Quality presets: Potato / Low / Medium / High / Cinematic / Custom, all in
 **Settings → Graphics**.
+
+### Two things that cost more than everything else combined
+
+Both were invisible in a profiler that only reports averages, and both are easy to reintroduce,
+so they are worth knowing about before touching the render path.
+
+**1. The scene's light count must never change.** three.js keys its shader program cache on how
+many lights of each kind are in the scene. Show or hide a single light and *every material in
+the world* is recompiled — a 1–3 second freeze. The village lighting its windows one at a time
+at dusk did this twenty times in a row, and the level crossing's alternating lamps did it twice
+a second while a train passed.
+
+So no fixture owns a light. Every lamp registers a source with the shared pool in
+`components/scene/LightPool.tsx`, which mounts a fixed six point lights plus one spot light,
+never touches `visible`, and re-aims them at the nearest lit sources each frame. The sun and
+moon stay mounted at zero intensity rather than being hidden; the sun's shadow map is skipped
+via `shadow.autoUpdate`, which is not part of the cache key.
+
+`window.__whStats.lights` exists to catch a regression here: if that number moves during play,
+something has started hiding a light again.
+
+**2. `<EffectComposer>` rebuilds its entire pass chain whenever its `children` array changes
+identity** — which JSX guarantees on every render of the enclosing component. A rebuild means
+new `EffectPass` objects, a freshly generated and compiled combined shader, and reallocated
+render targets for every pass.
+
+`useTimeSimulation` publishes the world clock to the store six times a second and used to *also*
+subscribe to it, so `<World>` — the root of the scene — re-rendered at 6 Hz. That was ~35 shader
+programs compiled and ~35 textures leaked *per second*, ending in a lost context. The clock now
+adopts external changes through a store subscription instead, and the composer lives behind
+`memo` in `components/postfx/PostProcessing.tsx` so it is insulated from parent renders
+regardless. Anything that animates — the depth-of-field ramp — is written onto the effect
+instance from `useFrame` rather than passed as a prop.
 
 ---
 

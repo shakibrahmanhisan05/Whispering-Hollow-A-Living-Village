@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { WorldProvider, type WorldContextValue } from './TerrainContext';
 import { Terrain } from './Terrain';
 import { SkyDome, StarField, SceneLighting, SceneFog, DistantHills } from './Sky';
+import { PointLightPool } from './LightPool';
 import { Trees } from './Trees';
 import { Grass, Wheatfield } from './Grass';
 import { Pond, Brook, LilyPads } from './Water';
@@ -187,6 +188,10 @@ export function World({ terrain, input, inputEnabled }: WorldProps) {
       <SkyDome />
       <StarField />
       <SceneLighting />
+      {/* Every lamp in the village shares these six lights. Mounted here, at
+          the root, so the scene's light count never changes for any reason —
+          see `components/scene/LightPool` for why that matters so much. */}
+      <PointLightPool />
       <DistantHills />
       <Clouds />
       <GroundMist />

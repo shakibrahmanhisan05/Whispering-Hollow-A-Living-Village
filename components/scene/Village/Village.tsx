@@ -18,6 +18,7 @@ import { useWindField } from '@/hooks/useWind';
 import { useGameStore } from '@/store/gameStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { House } from './House';
+import { usePointLightSource } from '../LightPool';
 import { Well, Windmill, Church, MarketStall, Bouquet } from './Landmarks';
 import { RandomSource } from '@/lib/utils/random';
 import { mergeGeometries, transformGeometry } from '@/lib/geometry/merge';
