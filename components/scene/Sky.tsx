@@ -266,7 +266,20 @@ export function SceneLighting() {
       sun.color.copy(lighting.sunColor);
       // Fade the sun out as it dips below the horizon rather than cutting.
       sun.intensity = lighting.sunIntensity * clamp(lighting.sunElevation * 4 + 0.1, 0, 1);
-      sun.visible = sun.intensity > 0.01;
+
+      /* Deliberately *not* `sun.visible = intensity > 0`.
+       *
+       * three keys its shader program cache on the number of lights in the
+       * scene, and hiding a light removes it from that count — so every
+       * material in the world gets recompiled the moment the sun sets, and
+       * again when it rises. Measured, that was a 1–3 second freeze at each
+       * transition. A directional light at zero intensity adds one multiply
+       * per fragment and nothing else, which is far cheaper than a stall.
+       *
+       * The shadow map is the part actually worth skipping, and
+       * `shadow.autoUpdate` skips it without touching `castShadow` — which is
+       * itself part of the cache key. */
+      sun.shadow.autoUpdate = sun.intensity > 0.01;
     }
 
     const moon = moonRef.current;
@@ -282,7 +295,7 @@ export function SceneLighting() {
       // Moonlight is cool and weak, and only matters when the sun is gone.
       moon.intensity =
         clamp(lighting.moonDirection.y * 2, 0, 1) * clamp(1 - lighting.sunElevation * 6, 0, 1) * 0.42;
-      moon.visible = moon.intensity > 0.01;
+      // Left visible at zero intensity for the same reason as the sun above.
     }
 
     const amb = ambientRef.current;

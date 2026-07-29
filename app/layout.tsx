@@ -55,7 +55,13 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>
+      {/* Browser extensions (password managers, ad blockers, security suites)
+          routinely stamp attributes onto <body> before React hydrates —
+          `bis_register`, `__processed_*`, `cz-shortcut-listen` and friends.
+          React sees the server HTML and the live DOM disagree and logs a
+          hydration mismatch that the developer can do nothing about. Body is
+          the standard place to suppress it. */}
+      <body suppressHydrationWarning>
         <TelemetryProvider>{children}</TelemetryProvider>
         <ServiceWorkerRegistrar />
         <AnalyticsGate />

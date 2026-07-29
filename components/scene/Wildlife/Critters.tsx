@@ -33,6 +33,19 @@ function inWindow(t: number, window: readonly [number, number]): boolean {
   return a <= b ? x >= a && x < b : x >= a || x < b;
 }
 
+/**
+ * Resolves how many particles to draw for a system of `capacity`.
+ *
+ * Clamped to the capacity, hard. Every particle system here allocates its
+ * buffers and colour tables once at full size; a quality multiplier above 1
+ * would index past the end of them. Doing that inside a `useEffect` throws,
+ * and a throw from an effect unmounts the whole React tree — the game simply
+ * never appears. Cheap insurance against a future config edit.
+ */
+function particleCount(capacity: number, budget: number): number {
+  return Math.max(0, Math.min(capacity, Math.floor(capacity * budget)));
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
  * FIREFLIES
  * ─────────────────────────────────────────────────────────────────────────── */
@@ -62,7 +75,7 @@ export function Fireflies() {
     return QUALITY_PRESETS[p]?.maxParticles ?? 1;
   }, [preset]);
 
-  const count = Math.floor(WILDLIFE.FIREFLY_COUNT * budget);
+  const count = particleCount(WILDLIFE.FIREFLY_COUNT, budget);
 
   const { geometry, material, state } = useMemo(() => {
     const max = WILDLIFE.FIREFLY_COUNT;
@@ -199,7 +212,7 @@ export function Butterflies() {
     const p = preset === 'custom' ? 'high' : preset;
     return QUALITY_PRESETS[p]?.maxParticles ?? 1;
   }, [preset]);
-  const count = Math.floor(WILDLIFE.BUTTERFLY_COUNT * budget);
+  const count = particleCount(WILDLIFE.BUTTERFLY_COUNT, budget);
 
   const { geometry, material, state } = useMemo(() => {
     // Two triangular wings.
@@ -262,7 +275,9 @@ export function Butterflies() {
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
-    for (let i = 0; i < count; i++) mesh.setColorAt(i, state.colors[i]!);
+    // Bound by the colour table, not by `count` — see `particleCount`.
+    const n = Math.min(count, state.colors.length);
+    for (let i = 0; i < n; i++) mesh.setColorAt(i, state.colors[i]!);
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }, [count, state.colors]);
 

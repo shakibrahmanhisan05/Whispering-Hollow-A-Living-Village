@@ -14,7 +14,23 @@ import type { NextConfig } from 'next';
  *   between Turbopack and Webpack. See `/shaders/README.md`.
  */
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
+  /**
+   * StrictMode is off, deliberately.
+   *
+   * In development React StrictMode mounts every component twice to surface
+   * impure effects. For an ordinary app that is a good trade. For this one it
+   * means the entire `<Canvas>` — terrain mesh, 420 trees, 81 grass chunks,
+   * every procedural texture, the shadow map and the whole postprocessing
+   * chain — is built, torn down, and built again. Peak GPU memory doubles,
+   * and on modest hardware that reliably exhausted the video memory budget
+   * and lost the WebGL context about eleven seconds into every dev session.
+   *
+   * There is nothing the app can do about it: the second allocation happens
+   * before the first is released, and three.js has no way to defer it. The
+   * production build never double-mounts, so this only ever affected `npm run
+   * dev` — which is precisely where it hurt most.
+   */
+  reactStrictMode: false,
 
   transpilePackages: [
     'three',

@@ -16,7 +16,7 @@
 
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { LIGHTING_STATES, TIME, WEATHER, SEASONS, TERRAIN_NOISE } from '@/config/game';
@@ -125,20 +125,41 @@ export function useTimeSimulation(): LightingState {
   const season = useGameStore((s) => s.season);
   const setTimeOfDay = useGameStore((s) => s.setTimeOfDay);
   const { timeFlowing, dayLength, fogDensity: fogMultiplier } = useSettingsStore((s) => s.world);
-  const storeTime = useGameStore((s) => s.timeOfDay);
 
   /* The clock lives in a ref and is only written back to the store a few times
    * a second. Writing it every frame would re-render every component that reads
    * `timeOfDay` — which is most of the scene. */
-  const clock = useRef(storeTime);
+  const clock = useRef(useGameStore.getState().timeOfDay);
   const publishAccumulator = useRef(0);
-  const externallySet = useRef(storeTime);
+  const externallySet = useRef(clock.current);
 
-  // Detect an external jump (the settings slider) and adopt it.
-  if (Math.abs(externallySet.current - storeTime) > 1e-4) {
-    clock.current = storeTime;
-    externallySet.current = storeTime;
-  }
+  /* Adopt external jumps — the time slider in Settings — *without* subscribing
+   * this component to `timeOfDay`.
+   *
+   * Reading it with `useGameStore((s) => s.timeOfDay)` looks harmless and is
+   * anything but: this hook publishes the clock six times a second, so a
+   * subscription here re-rendered its host — `<World>`, the root of the entire
+   * scene — six times a second too. React re-rendering the scene tree is
+   * cheap; what is not cheap is that `<EffectComposer>` rebuilds its whole
+   * pass chain whenever its `children` array changes identity, which it does
+   * on every parent render. That was ~35 shader programs and ~35 render
+   * targets allocated per second, multi-second compile stalls, and a steadily
+   * climbing texture count that ended in a lost context.
+   *
+   * A store subscription in an effect gets the same behaviour with no render. */
+  useEffect(
+    () =>
+      useGameStore.subscribe(
+        (s) => s.timeOfDay,
+        (t) => {
+          if (Math.abs(externallySet.current - t) > 1e-4) {
+            clock.current = t;
+            externallySet.current = t;
+          }
+        },
+      ),
+    [],
+  );
 
   const dayNumber = useRef(0);
 

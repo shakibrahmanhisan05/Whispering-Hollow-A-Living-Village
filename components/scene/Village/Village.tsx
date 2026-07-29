@@ -384,9 +384,7 @@ function HangingLanterns() {
               <cylinderGeometry args={[0.017, 0.017, 0.3, 4]} />
               <meshStandardMaterial color="#2a2018" />
             </mesh>
-            {litIndices.includes(i) && (
-              <LanternLight intensity={lighting.lampIntensity} />
-            )}
+            {litIndices.includes(i) && <LanternLight position={l.pos} />}
           </group>
         ))}
       </group>
@@ -400,17 +398,24 @@ function HangingLanterns() {
   );
 }
 
-/** A point light attached to one lantern, disabled during the day. */
-function LanternLight({ intensity }: { intensity: number }) {
-  const ref = useRef<THREE.PointLight>(null);
-  useFrame(() => {
-    if (!ref.current) return;
-    ref.current.intensity = intensity * 4.5;
-    ref.current.visible = intensity > 0.04;
-  });
-  return (
-    <pointLight ref={ref} position={[0, -0.28, 0]} color="#ffb45a" distance={11} decay={2} />
+/**
+ * One lantern's claim on the shared light pool, dark during the day.
+ *
+ * It renders nothing. Mounting a real `pointLight` here and switching it off at
+ * dawn would change the scene's light count and recompile every shader in the
+ * world — see `components/scene/LightPool`.
+ */
+function LanternLight({ position }: { position: [number, number, number] }) {
+  const lighting = useLighting();
+  const lamp = usePointLightSource(
+    [position[0], position[1] - 0.28, position[2]],
+    '#ffb45a',
+    11,
   );
+  useFrame(() => {
+    lamp.intensity = lighting.lampIntensity * 4.5;
+  });
+  return null;
 }
 
 /* ───────────────────────────────────────────────────────────────────────────

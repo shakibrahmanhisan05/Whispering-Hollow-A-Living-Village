@@ -19,6 +19,7 @@ import * as THREE from 'three';
 
 import { useLighting } from '@/hooks/useTimeOfDay';
 
+import { registerPointLight, spotSlot, type PointLightSource } from '../LightPool';
 import { mergeGeometries, transformGeometry } from '@/lib/geometry/merge';
 import { graffitiTexture, softSprite } from '@/lib/textures/procedural';
 import { WAGON_LIVERIES, TRAIN, type WagonType, type WagonLiveryId } from '@/config/game';
@@ -101,8 +102,24 @@ export function Locomotive({ wheelAngle, effort, speed }: LocomotiveProps) {
   const drivingWheels = useRef<THREE.Group[]>([]);
   const connectingRods = useRef<THREE.Group[]>([]);
   const fireboxMat = useRef<THREE.MeshStandardMaterial>(null);
-  const headlightRef = useRef<THREE.SpotLight>(null);
   const headlightConeRef = useRef<THREE.Mesh>(null);
+
+  /* The firebox glow borrows a slot from the shared pool, and the headlight
+   * drives the world's single permanent spot light. Neither can be mounted
+   * inside the train: this group is hidden until the ritual begins, and a
+   * light appearing changes the scene's light count — which recompiles every
+   * shader in the world, precisely as the train comes into view. */
+  const firebox = useMemo<PointLightSource>(
+    () => ({
+      position: new THREE.Vector3(),
+      color: new THREE.Color('#ff7a30'),
+      intensity: 0,
+      distance: 8,
+      decay: 2,
+    }),
+    [],
+  );
+  useEffect(() => registerPointLight(firebox), [firebox]);
 
   const { body, detail, wheel, buffers, materials } = useMemo(() => {
     const bodyParts: THREE.BufferGeometry[] = [];
@@ -311,15 +328,36 @@ export function Locomotive({ wheelAngle, effort, speed }: LocomotiveProps) {
     /* ── Headlight ───────────────────────────────────────────────────────
      * Only lit at night, when it cuts a genuine visible cone through the fog. */
     const night = 1 - clamp(lighting.sunElevation * 5, 0, 1);
-    if (headlightRef.current) {
-      headlightRef.current.intensity = night * 42;
-      headlightRef.current.visible = night > 0.05;
-    }
     if (headlightConeRef.current) {
       const mat = headlightConeRef.current.material as THREE.MeshBasicMaterial;
       mat.opacity = night * 0.12;
       headlightConeRef.current.visible = night > 0.05;
     }
+
+    /* ── Pooled lights ───────────────────────────────────────────────────
+     * The train spends most of its life hidden. Ancestor visibility is the
+     * honest test — the director hides the whole consist in one go, so this
+     * component's own `visible` flag says nothing. */
+    const body = bodyRef.current;
+    if (!body) return;
+
+    let onStage = body.visible;
+    body.traverseAncestors((o) => {
+      if (!o.visible) onStage = false;
+    });
+
+    if (!onStage) {
+      firebox.intensity = 0;
+      spotSlot.intensity = 0;
+      return;
+    }
+
+    body.localToWorld(firebox.position.set(0, 1.8, -L * 0.28));
+    firebox.intensity = 3.5;
+
+    body.localToWorld(spotSlot.position.set(0, 2.9, L * 0.5));
+    body.localToWorld(spotSlot.target.set(0, 0, L * 0.5 + 40));
+    spotSlot.intensity = night * 42;
   });
 
   return (
@@ -392,8 +430,6 @@ export function Locomotive({ wheelAngle, effort, speed }: LocomotiveProps) {
           roughness={0.9}
         />
       </mesh>
-      <pointLight position={[0, 1.8, -L * 0.28]} color="#ff7a30" intensity={3.5} distance={8} decay={2} />
-
       {/* Headlight. */}
       <mesh position={[0, 2.9, L * 0.47]}>
         <cylinderGeometry args={[0.26, 0.3, 0.34, 12]} />
@@ -404,17 +440,6 @@ export function Locomotive({ wheelAngle, effort, speed }: LocomotiveProps) {
           metalness={0.7}
         />
       </mesh>
-      <spotLight
-        ref={headlightRef}
-        position={[0, 2.9, L * 0.5]}
-        target-position={[0, 0, L * 0.5 + 40]}
-        angle={0.34}
-        penumbra={0.55}
-        distance={70}
-        decay={1.6}
-        color="#fff2cc"
-        intensity={0}
-      />
       {/* An additive cone standing in for volumetric scattering. Far cheaper
           than raymarching and, through fog at night, reads identically. */}
       <mesh

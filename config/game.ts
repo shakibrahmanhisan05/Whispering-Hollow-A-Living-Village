@@ -131,8 +131,16 @@ export const VEGETATION = {
   TREE_COUNT: 420,
   /** Distance under which the high-detail tree LOD is used. */
   LOD_HIGH_DISTANCE: 30,
-  /** Distance under which the medium tree LOD is used. */
-  LOD_MEDIUM_DISTANCE: 80,
+  /**
+   * Distance under which the medium tree LOD is used.
+   *
+   * Trees beyond this are not drawn at all, so it has to exceed the distance
+   * at which fog actually hides them or they visibly wink out. 170 m puts the
+   * cutoff comfortably inside the fog for every weather state; a medium-LOD
+   * tree is around 1 000 triangles, so the whole forest at medium is well
+   * under half a million.
+   */
+  LOD_MEDIUM_DISTANCE: 170,
   /** Beyond this, trees render as camera-facing billboards. */
   LOD_BILLBOARD_DISTANCE: 220,
   /** Per-instance uniform scale jitter, ± this fraction. */
@@ -154,9 +162,9 @@ export const VEGETATION = {
    * context outright (`GL_OUT_OF_MEMORY` on D3D11) when the player switched
    * presets mid-session.
    *
-   * 81 chunks × 10 000 blades × 40 bytes ≈ 32 MB, constant.
+   * 81 chunks × 7 500 blades × 40 bytes ≈ 24 MB, constant.
    */
-  GRASS_BLADES_PER_CHUNK: 10000,
+  GRASS_BLADES_PER_CHUNK: 7500,
   /** Grass is instanced in square chunks of this edge length. */
   GRASS_CHUNK_SIZE: 20,
   /** Radius in chunks around the player that stays populated with grass. */
@@ -174,8 +182,35 @@ export const VEGETATION = {
    * keeps blades readable at distance; anything wider reads as reeds.
    */
   GRASS_BLADE_WIDTH: 0.03,
-  /** Segments per blade — more segments = smoother bend under wind. */
-  GRASS_BLADE_SEGMENTS: 4,
+  /**
+   * Segments per blade — more segments = smoother bend under wind.
+   *
+   * Three, not four. Each segment is two triangles, and this geometry is
+   * instanced hundreds of thousands of times: one segment is worth roughly a
+   * hundred and fifty thousand triangles per frame. Three still bends
+   * convincingly under the quadratic wind curve; the fourth was invisible.
+   */
+  GRASS_BLADE_SEGMENTS: 3,
+  /**
+   * Blade density in the outermost chunk ring, as a fraction of full density.
+   *
+   * Grass is filled at full density near the player and thinned toward the
+   * edge of the streamed window. Uniform density across the window spends most
+   * of its triangles on blades that are a pixel tall and half-faded by the
+   * distance fade — which is how the meadow came to cost 6.5 million triangles
+   * a frame.
+   */
+  GRASS_FAR_DENSITY: 0.12,
+  /**
+   * Exponent on the ring-distance falloff.
+   *
+   * Below 1 thins aggressively close in; above 1 keeps density up further out.
+   * 1.35 is tuned against chunk *counts*: the outer rings contain far more
+   * chunks than the inner ones (ring 4 has 32 chunks against ring 1's 8), so a
+   * falloff that only bites at the very edge barely reduces anything. This
+   * starts thinning by the second ring, where blades are already 30 m away.
+   */
+  GRASS_FALLOFF_EXPONENT: 1.35,
   /**
    * Blades closer than this to the camera shrink away.
    * Without it, standing still plants a dozen blades directly across the lens
@@ -823,7 +858,12 @@ export const QUALITY_PRESETS = {
     treeCount: 420,
     lodDistanceScale: 1.0,
     postProcessing: true,
-    ssao: true,
+    /* Ambient occlusion is off at High and on at Cinematic. Measured, it was
+     * the last effect keeping frame times above the 16.7 ms vsync budget — and
+     * it earns the least of the whole stack in a scene that is mostly open
+     * ground under a bright sky. AO pays for itself in interiors; this game
+     * has none. */
+    ssao: false,
     bloom: true,
     godRays: true,
     depthOfField: true,
@@ -851,7 +891,18 @@ export const QUALITY_PRESETS = {
     vignette: true,
     smaa: true,
     waterReflection: true,
-    maxParticles: 1.5,
+    /**
+     * Particle budget, as a fraction of each system's allocated capacity.
+     *
+     * **Must never exceed 1.0.** Particle systems pre-allocate their buffers
+     * and colour tables at the full count once, at load; a factor above 1
+     * indexes past the end of those arrays. That is what used to throw
+     * `Cannot read properties of undefined (reading 'toArray')` out of
+     * `InstancedMesh.setColorAt` — and because it threw from inside a
+     * `useEffect`, React tore down the entire tree and the game never
+     * appeared at all.
+     */
+    maxParticles: 1.0,
     anisotropy: 16,
   },
 } as const;
@@ -859,6 +910,26 @@ export const QUALITY_PRESETS = {
 export type QualityPresetId = keyof typeof QUALITY_PRESETS | 'custom';
 export type QualitySettings = (typeof QUALITY_PRESETS)['high'];
 export type ShadowQuality = 'off' | 'low' | 'medium' | 'high' | 'ultra';
+
+/**
+ * The shared point-light pool.
+ *
+ * Every lamp in the world — house windows, plaza lanterns, the crossing's
+ * warning lights, the player's own lantern — competes for one of these slots
+ * rather than owning a light of its own. See `components/scene/LightPool` for
+ * why the *count* has to be a constant.
+ *
+ * Six is a deliberate number: it comfortably covers standing in the middle of
+ * the plaza at night with lanterns on every side, and past three or four the
+ * emissive materials and bloom are doing the visual work anyway.
+ */
+export const LIGHT_POOL = {
+  SIZE: 6,
+  /** Below this, a lamp is treated as off and never gets a slot. */
+  MIN_INTENSITY: 0.02,
+  /** Slack added to a lamp's radius before it is culled from the contest. */
+  REACH_MARGIN: 4,
+} as const;
 
 export const SHADOW_CONFIG: Record<
   ShadowQuality,

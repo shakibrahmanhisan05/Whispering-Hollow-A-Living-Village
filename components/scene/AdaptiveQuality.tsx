@@ -22,6 +22,14 @@ import { pushToast } from '@/store/uiState';
 import { AdaptiveQualityMonitor, computeDpr } from '@/lib/utils/perf';
 import { QUALITY_PRESETS, type QualityPresetId } from '@/config/game';
 
+/**
+ * Seconds of gameplay to ignore before the adaptive monitor may act.
+ *
+ * Long enough to cover shader compilation and the first texture uploads,
+ * short enough that a genuinely struggling machine is still rescued quickly.
+ */
+const ADAPTIVE_WARMUP_SECONDS = 8;
+
 /** The tier ladder, ordered cheapest to most expensive. */
 const LADDER: Array<Exclude<QualityPresetId, 'custom'>> = [
   'potato',
@@ -32,7 +40,7 @@ const LADDER: Array<Exclude<QualityPresetId, 'custom'>> = [
 ];
 
 export function AdaptiveQuality() {
-  const { gl, setDpr } = useThree();
+  const { gl, setDpr, scene } = useThree();
   const graphics = useSettingsStore((s) => s.graphics);
   const applyPreset = useSettingsStore((s) => s.applyQualityPreset);
   const phase = useGameStore((s) => s.phase);
@@ -92,7 +100,20 @@ export function AdaptiveQuality() {
     [applyPreset],
   );
 
-  /* ── Frame limiter ───────────────────────────────────────────────────── */
+  /* ── Warm-up grace period ────────────────────────────────────────────────
+   * The first seconds of a scene are the worst frames it will ever produce:
+   * every shader is compiling on first use, every texture is uploading, and
+   * the driver is still building pipeline state. Judging quality on those
+   * frames reliably dropped a perfectly capable machine to Low and left it
+   * there for the whole session. Wait until the scene has settled before
+   * forming an opinion. */
+  const warmup = useRef(0);
+  const isPlaying = phase === 'playing';
+
+  useEffect(() => {
+    warmup.current = 0;
+    monitor.reset();
+  }, [monitor, isPlaying]);
 
   const fpsAccumulator = useRef(0);
   const fpsFrames = useRef(0);
@@ -100,10 +121,16 @@ export function AdaptiveQuality() {
   useFrame((_, dt) => {
     if (phase !== 'playing' && phase !== 'photo' && phase !== 'seated') return;
 
+    warmup.current += dt;
+
     /* Adaptive quality only runs when the player has asked for it, and only
      * while a named preset is active — a Custom configuration is the player's
      * business, not ours. */
-    if (graphics.adaptiveQuality && graphics.preset !== 'custom') {
+    if (
+      graphics.adaptiveQuality &&
+      graphics.preset !== 'custom' &&
+      warmup.current > ADAPTIVE_WARMUP_SECONDS
+    ) {
       monitor.update(dt);
     }
 
@@ -116,6 +143,25 @@ export function AdaptiveQuality() {
       ui.triangles = gl.info.render.triangles;
       fpsAccumulator.current = 0;
       fpsFrames.current = 0;
+
+      /* Publish a render-stats snapshot on `window`. It costs one object
+       * assignment twice a second and makes the frame budget inspectable from
+       * the console or an automated performance run — which is the difference
+       * between optimising from measurements and optimising from guesses. */
+      let lights = 0;
+      scene.traverseVisible((o) => {
+        if ((o as THREE.Light).isLight) lights++;
+      });
+
+      (window as Window & { __whStats?: Record<string, number> }).__whStats = {
+        fps: ui.fps,
+        drawCalls: gl.info.render.calls,
+        triangles: gl.info.render.triangles,
+        geometries: gl.info.memory.geometries,
+        textures: gl.info.memory.textures,
+        programs: gl.info.programs?.length ?? 0,
+        lights,
+      };
     }
   });
 

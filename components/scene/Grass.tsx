@@ -28,7 +28,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { GRASS_VERTEX, GRASS_FRAGMENT, WHEAT_VERTEX, WHEAT_FRAGMENT } from '@/shaders/grass.glsl';
 import { mulberry32 } from '@/lib/utils/random';
 import { VEGETATION, SEASONS, WORLD, ZONES } from '@/config/game';
-import { hexToRgb } from '@/lib/utils/math';
+import { hexToRgb, lerp } from '@/lib/utils/math';
 import { POND, ROAD_QUERY, RAIL_QUERY } from '@/lib/world/layout';
 
 /**
@@ -158,6 +158,8 @@ export function Grass() {
   /* ── Chunk pool ─────────────────────────────────────────────────────────── */
   const chunks = useRef<ChunkBuffers[]>([]);
   const lastCenter = useRef<{ cx: number; cz: number }>({ cx: 9999, cz: 9999 });
+  /** Chunks awaiting a refill, drained a few per frame. */
+  const fillQueue = useRef<Array<{ chunk: ChunkBuffers; cx: number; cz: number }>>([]);
 
   const chunkGrid = chunkRadius * 2 + 1;
   const totalChunks = chunkGrid * chunkGrid;
@@ -176,6 +178,28 @@ export function Grass() {
       const originX = cx * chunkSize;
       const originZ = cz * chunkSize;
 
+      const target = bladesPerChunk;
+
+      /* ── Chunk-level early-out for the expensive tests ──────────────────
+       * `ROAD_QUERY.nearest` and `RAIL_QUERY.nearest` walk a spatial grid.
+       * Run per blade across a whole chunk that is nowhere near either
+       * feature — which is most of them — they were the single most expensive
+       * thing in the fill, and the fill happens seventeen times in one frame
+       * when the player crosses a chunk boundary.
+       *
+       * Testing the chunk centre once tells us whether any blade in it could
+       * possibly be close enough to matter. The radius is the chunk's own
+       * half-diagonal plus the rejection distance. */
+      const centreX = originX + chunkSize * 0.5;
+      const centreZ = originZ + chunkSize * 0.5;
+      const chunkReach = chunkSize * 0.71 + 8;
+      const nearRoad = ROAD_QUERY.nearest(centreX, centreZ).distance < chunkReach;
+      const nearRail = RAIL_QUERY.nearest(centreX, centreZ).distance < chunkReach;
+      const nearPlaza = Math.hypot(centreX, centreZ) < 15 + chunkReach;
+      const nearPond =
+        Math.hypot(centreX - POND.center[0], centreZ - POND.center[1]) <
+        POND.radius + 1 + chunkReach;
+
       const offsets = chunk.offset.array as Float32Array;
       const rotations = chunk.rotation.array as Float32Array;
       const scales = chunk.scale.array as Float32Array;
@@ -184,7 +208,7 @@ export function Grass() {
       const bends = chunk.bend.array as Float32Array;
 
       let written = 0;
-      const attempts = bladesPerChunk;
+      const attempts = target;
 
       for (let i = 0; i < attempts; i++) {
         const x = originX + rand() * chunkSize;
@@ -195,14 +219,24 @@ export function Grass() {
 
         const y = terrain.heightAt(x, z);
         if (y < WORLD.WATER_LEVEL + 0.35) continue;
-        if (terrain.slopeAt(x, z) > 0.65) continue;
+
+        /* Cheap slope test: two forward differences rather than
+         * `terrain.slopeAt`, which builds a full normal from four samples.
+         * Two is enough to reject a cliff, and this runs 7 500 times per
+         * chunk. */
+        const dhx = terrain.heightAt(x + 1, z) - y;
+        const dhz = terrain.heightAt(x, z + 1) - y;
+        if (dhx * dhx + dhz * dhz > 1.6) continue;
+
         // The plaza is paved.
-        if (Math.hypot(x, z) < 15) continue;
+        if (nearPlaza && Math.hypot(x, z) < 15) continue;
         // Nothing in the pond.
-        if (Math.hypot(x - POND.center[0], z - POND.center[1]) < POND.radius + 1) continue;
+        if (nearPond && Math.hypot(x - POND.center[0], z - POND.center[1]) < POND.radius + 1) {
+          continue;
+        }
         // Roads and railway are bare.
-        if (ROAD_QUERY.nearest(x, z).distance < 2.4) continue;
-        if (RAIL_QUERY.nearest(x, z).distance < 6) continue;
+        if (nearRoad && ROAD_QUERY.nearest(x, z).distance < 2.4) continue;
+        if (nearRail && RAIL_QUERY.nearest(x, z).distance < 6) continue;
 
         const o = written * 3;
         offsets[o] = x;
@@ -234,9 +268,36 @@ export function Grass() {
       chunk.phase.needsUpdate = true;
       chunk.colorJitter.needsUpdate = true;
       chunk.bend.needsUpdate = true;
+      // The draw count is set separately by `applyRingDensity`.
       chunk.geometry.instanceCount = written;
     };
   }, [bladesPerChunk, chunkSize, terrain]);
+
+  /**
+   * Sets a chunk's *draw* count from how far it is from the player.
+   *
+   * Blades are scattered in random order within a chunk, so drawing the first
+   * N of them is an unbiased random thinning — no re-scatter needed. That makes
+   * density a single integer write per chunk, cheap enough to redo for all of
+   * them every time the player crosses a chunk boundary.
+   *
+   * Distance thinning is where nearly all the triangle savings come from:
+   * blades in the outer rings are a few pixels tall and already half-eaten by
+   * the shader's distance fade, so rendering them at full density was spending
+   * millions of triangles a frame on nothing.
+   */
+  const applyRingDensity = useMemo(() => {
+    return (chunk: ChunkBuffers, centerCx: number, centerCz: number) => {
+      const ring = Math.max(Math.abs(chunk.cx - centerCx), Math.abs(chunk.cz - centerCz));
+      const ringT = chunkRadius > 0 ? Math.min(ring / chunkRadius, 1) : 0;
+      const density = lerp(
+        1,
+        VEGETATION.GRASS_FAR_DENSITY,
+        Math.pow(ringT, VEGETATION.GRASS_FALLOFF_EXPONENT),
+      );
+      chunk.geometry.instanceCount = Math.max(0, Math.floor(chunk.count * density));
+    };
+  }, [chunkRadius]);
 
   /* Allocate the pool once, at fixed capacity, independent of quality. */
   useEffect(() => {
@@ -324,11 +385,17 @@ export function Grass() {
   /* Re-fill every chunk when the density setting changes, so more (or fewer)
    * blades appear immediately rather than only as chunks recycle. */
   useEffect(() => {
+    const { cx, cz } = lastCenter.current;
     for (const chunk of chunks.current) {
       if (chunk.cx === 99999) continue;
       populateChunk(chunk, chunk.cx, chunk.cz);
+      applyRingDensity(chunk, cx, cz);
     }
-  }, [bladesPerChunk, populateChunk]);
+  }, [bladesPerChunk, populateChunk, applyRingDensity]);
+
+  /* Season tint, parsed once. `hexToRgb` returns a fresh array; calling it in
+   * `useFrame` allocated 60 throwaway arrays a second to re-derive a constant. */
+  const grassTint = useMemo(() => hexToRgb(SEASONS[season].grassTint), [season]);
 
   /* ── Streaming + uniform sync ─────────────────────────────────────────── */
   useFrame(({ camera }, dt) => {
@@ -342,16 +409,33 @@ export function Grass() {
     u.uFogDensity.value = lighting.fogDensity;
 
     const s = SEASONS[season];
-    const [tr, tg, tb] = hexToRgb(s.grassTint);
+    const [tr, tg, tb] = grassTint;
     u.uTipColor.value.setRGB(tr, tg, tb);
     u.uBaseColor.value.setRGB(tr * 0.45, tg * 0.5, tb * 0.42);
     u.uSnowCoverage.value += (s.snowCoverage - u.uSnowCoverage.value) * Math.min(dt * 2, 0.1);
 
     if (chunks.current.length === 0 || bladesPerChunk <= 0) return;
 
+    /* ── Drain the fill queue ────────────────────────────────────────────
+     * Filling a chunk means scattering thousands of blades, each needing
+     * terrain height, a slope test and possibly a spatial query. Doing a
+     * whole boundary crossing's worth in one frame is a visible stutter
+     * every twenty metres walked — it was the entire p95 frame-time spike.
+     * Two chunks per frame clears a crossing in about nine frames, well
+     * before the player reaches the next boundary. */
+    if (fillQueue.current.length > 0) {
+      const budget = Math.min(2, fillQueue.current.length);
+      for (let i = 0; i < budget; i++) {
+        const job = fillQueue.current.shift();
+        if (!job) break;
+        populateChunk(job.chunk, job.cx, job.cz);
+        applyRingDensity(job.chunk, lastCenter.current.cx, lastCenter.current.cz);
+      }
+    }
+
     /* Recycle chunks when the player crosses a boundary. Only the chunks that
      * have fallen outside the window are re-populated — typically one row or
-     * column, i.e. 13 chunks, not all 169. */
+     * column, not all of them. */
     const cx = Math.floor(camera.position.x / chunkSize);
     const cz = Math.floor(camera.position.z / chunkSize);
     if (cx === lastCenter.current.cx && cz === lastCenter.current.cz) return;
@@ -374,14 +458,30 @@ export function Grass() {
       else stale.push(chunk);
     }
 
-    // Re-fill the stale ones into the newly-wanted cells.
+    /* Queue the stale chunks for refilling rather than doing it now. They
+     * keep drawing their old contents until their turn comes, which is
+     * invisible — they are at the far edge of the window, behind the
+     * distance fade. */
+    fillQueue.current.length = 0;
     let staleIndex = 0;
     for (const key of wanted) {
       if (occupied.has(key)) continue;
       const chunk = stale[staleIndex++];
       if (!chunk) break;
       const [nx, nz] = key.split(',').map(Number) as [number, number];
-      populateChunk(chunk, nx, nz);
+      // Claim the cell immediately so the next crossing doesn't re-queue it.
+      chunk.cx = nx;
+      chunk.cz = nz;
+      chunk.geometry.instanceCount = 0;
+      fillQueue.current.push({ chunk, cx: nx, cz: nz });
+    }
+
+    /* Every chunk's ring distance has changed, including the ones that stayed
+     * put — so re-apply density across the board. This is one integer write
+     * per chunk, not a re-scatter, so doing all of them is trivial. */
+    for (const chunk of chunks.current) {
+      if (chunk.cx === 99999) continue;
+      applyRingDensity(chunk, cx, cz);
     }
   });
 
@@ -507,6 +607,21 @@ export function Wheatfield() {
     [geometry, material, baseGeometry],
   );
 
+  /* The colour the crop is easing toward. Built once per season rather than
+   * twice per frame — `new THREE.Color()` in a `useFrame` body is 120 dead
+   * objects a second for a value that only changes when the season turns. */
+  const seasonWheat = useMemo(
+    () => ({
+      head: new THREE.Color(
+        season === 'spring' ? '#b8c46a' : season === 'winter' ? '#a89878' : '#e8cf8a',
+      ),
+      stalk: new THREE.Color(
+        season === 'spring' ? '#8aa84a' : season === 'winter' ? '#9a8f78' : '#b8a05a',
+      ),
+    }),
+    [season],
+  );
+
   useFrame(({ camera }) => {
     const u = material.uniforms;
     u.uCameraPos.value.copy(camera.position);
@@ -518,12 +633,8 @@ export function Wheatfield() {
     u.uFogDensity.value = lighting.fogDensity;
 
     // Wheat is green in spring, gold in summer, cut stubble in winter.
-    const headColor =
-      season === 'spring' ? '#b8c46a' : season === 'winter' ? '#a89878' : '#e8cf8a';
-    const stalkColor =
-      season === 'spring' ? '#8aa84a' : season === 'winter' ? '#9a8f78' : '#b8a05a';
-    u.uHeadColor.value.lerp(new THREE.Color(headColor), 0.02);
-    u.uStalkColor.value.lerp(new THREE.Color(stalkColor), 0.02);
+    u.uHeadColor.value.lerp(seasonWheat.head, 0.02);
+    u.uStalkColor.value.lerp(seasonWheat.stalk, 0.02);
   });
 
   if (count === 0) return null;

@@ -12,6 +12,7 @@ import { RigidBody, CuboidCollider } from '@react-three/rapier';
 import * as THREE from 'three';
 
 import { useWorld } from '../TerrainContext';
+import { registerPointLight, type PointLightSource } from '../LightPool';
 import { mergeGeometries, transformGeometry } from '@/lib/geometry/merge';
 import { LEVEL_CROSSING, RAIL_QUERY } from '@/lib/world/layout';
 import { clamp, smootherstep } from '@/lib/utils/math';
@@ -31,7 +32,6 @@ export function Crossing({ barrierState, active }: CrossingProps) {
 
   const arms = useRef<THREE.Group[]>([]);
   const lampMaterials = useRef<THREE.MeshStandardMaterial[]>([]);
-  const lampLights = useRef<THREE.PointLight[]>([]);
   const blinkPhase = useRef(0);
 
   const groundY = useMemo(
@@ -47,6 +47,44 @@ export function Crossing({ barrierState, active }: CrossingProps) {
     const b = RAIL_QUERY.pointAtLength(near.along + 4);
     return Math.atan2(b[0] - a[0], b[2] - a[2]);
   }, []);
+
+  /* The four warning lamps take slots in the shared light pool.
+   *
+   * These flash at about 1 Hz, alternating. As real `pointLight`s switched on
+   * and off that was two changes a second to the scene's light count — and
+   * every change recompiles every shader in the world. A passing train would
+   * have stuttered its way across the road. See `components/scene/LightPool`.
+   *
+   * Indices match `lampMaterials`: 0–1 are the far post, 2–3 the near one. */
+  const lampSources = useMemo(() => {
+    const out: PointLightSource[] = [];
+    const cos = Math.cos(trackYaw);
+    const sin = Math.sin(trackYaw);
+    for (const side of [1, -1]) {
+      for (const dx of [-0.42, 0.42]) {
+        // Local → world through the group's own yaw, resolved once.
+        const lx = side * 4.6 + dx;
+        const lz = 0.12;
+        out.push({
+          position: new THREE.Vector3(
+            LEVEL_CROSSING.x + lx * cos + lz * sin,
+            groundY + 2.85,
+            LEVEL_CROSSING.z - lx * sin + lz * cos,
+          ),
+          color: new THREE.Color('#ff3a20'),
+          intensity: 0,
+          distance: 8,
+          decay: 2,
+        });
+      }
+    }
+    return out;
+  }, [trackYaw, groundY]);
+
+  useEffect(() => {
+    const offs = lampSources.map((s) => registerPointLight(s));
+    return () => offs.forEach((off) => off());
+  }, [lampSources]);
 
   const { post, deck, materials } = useMemo(() => {
     const postParts: THREE.BufferGeometry[] = [];
@@ -143,12 +181,9 @@ export function Crossing({ barrierState, active }: CrossingProps) {
       const on = i % 2 === 0 ? leftOn : rightOn;
       mat.emissiveIntensity = on ? 4.5 : 0.05;
     }
-    for (let i = 0; i < lampLights.current.length; i++) {
-      const light = lampLights.current[i];
-      if (!light) continue;
+    for (let i = 0; i < lampSources.length; i++) {
       const on = i % 2 === 0 ? leftOn : rightOn;
-      light.intensity = on ? 3.5 : 0;
-      light.visible = on;
+      lampSources[i]!.intensity = on ? 3.5 : 0;
     }
   });
 
@@ -182,15 +217,6 @@ export function Crossing({ barrierState, active }: CrossingProps) {
               <cylinderGeometry args={[0.19, 0.19, 0.14, 12, 1, true]} />
               <meshStandardMaterial color="#1e2226" side={THREE.DoubleSide} />
             </mesh>
-            <pointLight
-              ref={(el) => {
-                if (el) lampLights.current[(side > 0 ? 0 : 2) + li] = el;
-              }}
-              color="#ff3a20"
-              intensity={0}
-              distance={8}
-              decay={2}
-            />
           </group>
         )),
       )}

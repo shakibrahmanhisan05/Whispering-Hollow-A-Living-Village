@@ -233,31 +233,47 @@ export function Trees() {
     [materials],
   );
 
-  /* Season drives foliage colour and snow. */
-  useFrame((_, dt) => {
+  /**
+   * The foliage colour each species is easing toward.
+   *
+   * Recomputed only when the season changes, not every frame. Deriving the
+   * target inside `useFrame` meant six string mixes and six `new THREE.Color`
+   * allocations per frame — a few hundred short-lived objects a second, for a
+   * value that changes four times a year.
+   */
+  const seasonTargets = useMemo(() => {
     const s = SEASONS[season];
-    snowUniform.current.value += (s.snowCoverage - snowUniform.current.value) * Math.min(dt, 0.1);
-
+    const map = new Map<string, THREE.Color>();
     for (const species of TREE_SPECIES) {
-      const mats = materials.get(species);
-      if (!mats) continue;
-      const leaf = mats.leaf as THREE.MeshStandardMaterial;
       const base = speciesColors(species).leaf;
-
       let target = base;
       if (isDeciduous(species)) {
         if (season === 'autumn') {
           // Each species turns a slightly different autumn colour.
           const autumnHues = ['#d4802f', '#e8a83c', '#c05a2a', '#b8923c'];
-          const idx = species.charCodeAt(0) % autumnHues.length;
-          target = autumnHues[idx]!;
+          target = autumnHues[species.charCodeAt(0) % autumnHues.length]!;
         } else if (season === 'spring' && blossoms(species)) {
           target = '#f2b8ce';
         } else {
           target = mixHex(base, s.foliageTint, 0.45);
         }
       }
-      leaf.color.lerp(new THREE.Color(target), Math.min(dt * 0.8, 0.1));
+      map.set(species, new THREE.Color(target));
+    }
+    return map;
+  }, [season]);
+
+  /* Season drives foliage colour and snow. */
+  useFrame((_, dt) => {
+    const s = SEASONS[season];
+    snowUniform.current.value += (s.snowCoverage - snowUniform.current.value) * Math.min(dt, 0.1);
+
+    const blend = Math.min(dt * 0.8, 0.1);
+    for (const species of TREE_SPECIES) {
+      const mats = materials.get(species);
+      const target = seasonTargets.get(species);
+      if (!mats || !target) continue;
+      (mats.leaf as THREE.MeshStandardMaterial).color.lerp(target, blend);
     }
   });
 
@@ -344,6 +360,14 @@ function TreeSpeciesGroup({
   const pos = useMemo(() => new THREE.Vector3(), []);
   const scale = useMemo(() => new THREE.Vector3(), []);
   const cursor = useRef(0);
+  /**
+   * Which LOD tier each instance is currently written as: 0 hidden, 1 medium,
+   * 2 high. Comparing against this lets the per-frame pass skip instances that
+   * have not changed tier — which is nearly all of them, nearly always. Before
+   * this, every slice marked all four instance-matrix buffers dirty and the
+   * renderer re-uploaded them for all eighteen species groups every frame.
+   */
+  const lodState = useRef<Int8Array>(new Int8Array(0));
 
   /* Write every matrix once on mount; the per-frame work is only hiding and
    * showing instances by scaling them to zero, which is a single matrix write
@@ -368,6 +392,9 @@ function TreeSpeciesGroup({
     write(highLeaf.current, false);
     write(medTrunk.current, true);
     write(medLeaf.current, true);
+
+    lodState.current = new Int8Array(count).fill(1);
+    cursor.current = 0;
   }, [instances, count, matrix, hidden, quat, pos, scale]);
 
   useFrame(({ camera }) => {
@@ -385,6 +412,11 @@ function TreeSpeciesGroup({
      * produced a `Cannot read properties of undefined` on every LOD pass
      * following a downshift. */
     if (cursor.current >= count) cursor.current = 0;
+    if (lodState.current.length !== count) lodState.current = new Int8Array(count).fill(1);
+
+    // Only mark a buffer dirty if something in it actually moved this frame.
+    let highDirty = false;
+    let medDirty = false;
 
     for (let n = 0; n < slice; n++) {
       const i = cursor.current;
@@ -397,30 +429,38 @@ function TreeSpeciesGroup({
       const dz = inst.z - camZ;
       const dist = Math.sqrt(dx * dx + dz * dz);
 
-      const useHigh = dist < lodHigh;
-      const useMedium = !useHigh && dist < lodMedium;
+      const tier = dist < lodHigh ? 2 : dist < lodMedium ? 1 : 0;
+
+      /* The overwhelmingly common case: this tree is exactly where it was in
+       * the LOD hierarchy last pass. Writing its matrix again would be
+       * identical bytes, but it would still dirty the buffer and cost a full
+       * re-upload of every instance in the group. */
+      if (lodState.current[i] === tier) continue;
+      lodState.current[i] = tier;
+
+      const useHigh = tier === 2;
+      const useMedium = tier === 1;
 
       pos.set(inst.x, inst.y, inst.z);
       quat.setFromAxisAngle(_up, inst.rotation);
       scale.setScalar(inst.scale);
       matrix.compose(pos, quat, scale);
 
-      if (highTrunk.current) {
-        highTrunk.current.setMatrixAt(i, useHigh ? matrix : hidden);
-        highTrunk.current.instanceMatrix.needsUpdate = true;
-      }
-      if (highLeaf.current) {
-        highLeaf.current.setMatrixAt(i, useHigh ? matrix : hidden);
-        highLeaf.current.instanceMatrix.needsUpdate = true;
-      }
-      if (medTrunk.current) {
-        medTrunk.current.setMatrixAt(i, useMedium ? matrix : hidden);
-        medTrunk.current.instanceMatrix.needsUpdate = true;
-      }
-      if (medLeaf.current) {
-        medLeaf.current.setMatrixAt(i, useMedium ? matrix : hidden);
-        medLeaf.current.instanceMatrix.needsUpdate = true;
-      }
+      if (highTrunk.current) highTrunk.current.setMatrixAt(i, useHigh ? matrix : hidden);
+      if (highLeaf.current) highLeaf.current.setMatrixAt(i, useHigh ? matrix : hidden);
+      if (medTrunk.current) medTrunk.current.setMatrixAt(i, useMedium ? matrix : hidden);
+      if (medLeaf.current) medLeaf.current.setMatrixAt(i, useMedium ? matrix : hidden);
+      highDirty = true;
+      medDirty = true;
+    }
+
+    if (highDirty) {
+      if (highTrunk.current) highTrunk.current.instanceMatrix.needsUpdate = true;
+      if (highLeaf.current) highLeaf.current.instanceMatrix.needsUpdate = true;
+    }
+    if (medDirty) {
+      if (medTrunk.current) medTrunk.current.instanceMatrix.needsUpdate = true;
+      if (medLeaf.current) medLeaf.current.instanceMatrix.needsUpdate = true;
     }
   });
 

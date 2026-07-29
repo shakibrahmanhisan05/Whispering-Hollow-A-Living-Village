@@ -27,6 +27,7 @@ import { RandomSource } from '@/lib/utils/random';
 import { mergeGeometries, transformGeometry } from '@/lib/geometry/merge';
 import { plasterTexture, roofTexture, woodTexture, softSprite } from '@/lib/textures/procedural';
 import { applySnowAccumulation } from '@/shaders/foliage.glsl';
+import { usePointLightSource } from '../LightPool';
 import { SEASONS } from '@/config/game';
 import { clamp } from '@/lib/utils/math';
 
@@ -374,7 +375,15 @@ export function House({ position, rotation, seed, index, scale = 1 }: HouseProps
     [geo, materials],
   );
 
-  const lightRef = useRef<THREE.PointLight>(null);
+  /* The interior spill light. Registered with the shared pool rather than
+   * mounted here: a per-house light that switches itself on at dusk changes
+   * the scene's light count, and that recompiles every shader in the world.
+   * See `components/scene/LightPool`. */
+  const lamp = usePointLightSource(
+    [position[0], position[1] + 2.2 * scale, position[2]],
+    '#ffb45a',
+    9,
+  );
 
   useFrame((_, dt) => {
     snowUniform.current.value +=
@@ -386,12 +395,7 @@ export function House({ position, rotation, seed, index, scale = 1 }: HouseProps
     const offset = (index % 5) * 0.006;
     const lit = clamp(lighting.lampIntensity - offset, 0, 1);
     materials.window.emissiveIntensity = lit * 2.4;
-
-    // A matching interior spill light, only when actually lit, and only nearby.
-    if (lightRef.current) {
-      lightRef.current.intensity = lit * 2.6;
-      lightRef.current.visible = lit > 0.03;
-    }
+    lamp.intensity = lit * 2.6;
   });
 
   /* Trinkets the player has bought and placed on this house's windowsills. */
@@ -406,15 +410,6 @@ export function House({ position, rotation, seed, index, scale = 1 }: HouseProps
       <mesh geometry={geo.roof} material={materials.roof} castShadow receiveShadow />
       <mesh geometry={geo.timber} material={materials.timber} castShadow receiveShadow />
       <mesh geometry={geo.windows} material={materials.window} />
-
-      <pointLight
-        ref={lightRef}
-        position={[0, 2.2, 0]}
-        color="#ffb45a"
-        intensity={0}
-        distance={9}
-        decay={2}
-      />
 
       <RigidBody type="fixed" colliders={false}>
         {geo.colliders.map((c, i) => (

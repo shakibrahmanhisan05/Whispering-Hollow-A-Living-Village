@@ -25,9 +25,10 @@
 
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import type { DepthOfFieldEffect } from 'postprocessing';
 import {
   EffectComposer,
   Bloom,
@@ -42,11 +43,11 @@ import {
 import { BlendFunction, ToneMappingMode } from 'postprocessing';
 
 import { useLighting } from '@/hooks/useTimeOfDay';
-import { useSettingsStore } from '@/store/settingsStore';
+import { useSettingsStore, type GraphicsSettings } from '@/store/settingsStore';
 import { useGameStore } from '@/store/gameStore';
 import { ui } from '@/store/uiState';
 import { playerState } from '../player/PlayerController';
-import { POSTFX, COLOR_GRADES, TIME } from '@/config/game';
+import { POSTFX, COLOR_GRADES, TIME, type ColorblindMode } from '@/config/game';
 import { clamp, damp } from '@/lib/utils/math';
 import { ColorGradeEffect } from './ColorGradeEffect';
 
@@ -101,18 +102,30 @@ export function PostProcessing() {
    * Eases in after the player has stood still for five seconds. The idea is
    * that the game is "looking at" whatever the player is looking at once they
    * stop to appreciate it — and it means DoF never blurs anything during
-   * active movement, where it would just read as motion sickness. */
+   * active movement, where it would just read as motion sickness.
+   *
+   * The important part is `dofMounted`. Ramping `bokehScale` to zero makes DoF
+   * *invisible* but not *free*: the pass still renders its circle-of-confusion
+   * buffer and both bokeh blurs every single frame. Measured, that was the
+   * single most expensive thing in the pipeline — it pushed frame times from
+   * 17 ms to 33 ms, i.e. straight from 60 fps to a vsync-halved 30. So the
+   * effect is unmounted entirely while moving and only mounted once the player
+   * has actually stopped, at which point a one-off shader compile is
+   * unnoticeable because nothing is moving. */
   const dofBlur = useRef(0);
   const idleTime = useRef(0);
+  const [dofMounted, setDofMounted] = useState(false);
+  const dofEffect = useRef<DepthOfFieldEffect>(null);
 
   useFrame((_, dt) => {
-    // Photo mode drives DoF from its own aperture control.
+    // Photo mode drives DoF from its own aperture control, always on.
     if (phase === 'photo') {
       idleTime.current = POSTFX.DOF_IDLE_DELAY;
       /* Aperture → blur. Physically, a wider aperture (smaller f-number) means
        * a shallower depth of field, so the mapping is inverse. */
       const aperture = ui.photoAperture;
       dofBlur.current = damp(dofBlur.current, clamp(4.5 / aperture, 0.2, 4), 0.25, dt);
+      if (!dofMounted && graphics.depthOfField) setDofMounted(true);
       return;
     }
 
@@ -123,8 +136,23 @@ export function PostProcessing() {
     }
 
     const wantDof =
-      graphics.depthOfField && idleTime.current > POSTFX.DOF_IDLE_DELAY && !accessibility.reducedMotion;
+      graphics.depthOfField &&
+      idleTime.current > POSTFX.DOF_IDLE_DELAY &&
+      !accessibility.reducedMotion;
+
     dofBlur.current = damp(dofBlur.current, wantDof ? POSTFX.DOF.bokehScale : 0, 1.2, dt);
+
+    /* Mount as soon as it's wanted; unmount only once it has fully faded out,
+     * so the player never sees the blur snap off. */
+    if (wantDof && !dofMounted) setDofMounted(true);
+    else if (!wantDof && dofMounted && dofBlur.current < 0.02) setDofMounted(false);
+  });
+
+  /* Push the ramp straight onto the effect instead of passing it as a prop.
+   * A changing prop would re-render {@link EffectStack} sixty times a second,
+   * and every render of that subtree rebuilds the composer's pass chain. */
+  useFrame(() => {
+    if (dofEffect.current) dofEffect.current.bokehScale = dofBlur.current;
   });
 
   /* ── Tone mapping exposure ───────────────────────────────────────────── */
@@ -138,8 +166,6 @@ export function PostProcessing() {
     // adapting to the light, essentially.
     gl.toneMappingExposure = graphics.exposure * lighting.exposure;
   });
-
-  const grade = COLOR_GRADES[graphics.colorGrade] ?? COLOR_GRADES.goldenHour;
 
   /* ── Renderer liveness guard ─────────────────────────────────────────────
    * `EffectComposer`'s constructor reads
@@ -168,7 +194,54 @@ export function PostProcessing() {
   return (
     <>
       {graphics.godRays && <GodRaySun onReady={setSunMesh} />}
+      <EffectStack
+        graphics={graphics}
+        colorblindMode={accessibility.colorblindMode}
+        sunMesh={sunMesh}
+        dofMounted={dofMounted}
+        dofRef={dofEffect}
+      />
+    </>
+  );
+}
 
+interface EffectStackProps {
+  graphics: GraphicsSettings;
+  colorblindMode: ColorblindMode;
+  sunMesh: THREE.Mesh | null;
+  dofMounted: boolean;
+  dofRef: React.RefObject<DepthOfFieldEffect | null>;
+}
+
+/**
+ * The composer and its effects, isolated behind {@link memo}.
+ *
+ * `<EffectComposer>` rebuilds its entire pass chain whenever its `children`
+ * array changes identity — and JSX produces a fresh array on every render of
+ * the enclosing component. A rebuild means new `EffectPass` objects, which
+ * means the combined effect shader is generated and compiled again and every
+ * pass reallocates its render targets.
+ *
+ * That is ruinous if anything above re-renders on a timer: at six renders a
+ * second the composer was compiling roughly thirty-five shader programs and
+ * leaking as many textures every second, producing multi-second freezes and,
+ * eventually, a lost context.
+ *
+ * So this subtree takes only values that are referentially stable between
+ * renders, and anything that animates is written onto the effect instances
+ * from `useFrame` instead of passed down as a prop.
+ */
+const EffectStack = memo(function EffectStack({
+  graphics,
+  colorblindMode,
+  sunMesh,
+  dofMounted,
+  dofRef,
+}: EffectStackProps) {
+  const grade = COLOR_GRADES[graphics.colorGrade] ?? COLOR_GRADES.goldenHour;
+
+  return (
+    <>
       <EffectComposer
         // Half-float keeps HDR values above 1.0 alive through the chain, which
         // is what lets bloom pick out genuinely bright things rather than
@@ -231,12 +304,15 @@ export function PostProcessing() {
           <></>
         )}
 
-        {/* 4. Depth of field. */}
-        {graphics.depthOfField ? (
+        {/* 4. Depth of field — mounted only while actually in use. */}
+        {graphics.depthOfField && dofMounted ? (
           <DepthOfField
+            ref={dofRef}
             focusDistance={POSTFX.DOF.focusDistance}
             focalLength={POSTFX.DOF.focalLength}
-            bokehScale={dofBlur.current}
+            /* `bokehScale` is deliberately absent: it ramps every frame and is
+             * written straight onto the effect by the parent. As a prop it
+             * would rebuild the whole chain sixty times a second. */
             /* Depth of field is by far the most memory-hungry effect in the
              * chain — it needs a circle-of-confusion target plus near and far
              * bokeh buffers. Running it at 480p and letting the upscale blur
@@ -269,7 +345,7 @@ export function PostProcessing() {
           saturation={grade.saturation}
           contrast={grade.contrast}
           grain={grade.grain}
-          colorblindMode={accessibility.colorblindMode}
+          colorblindMode={colorblindMode}
         />
 
         {/* 7. Vignette. */}
@@ -293,6 +369,6 @@ export function PostProcessing() {
       </EffectComposer>
     </>
   );
-}
+});
 
 const _caOffset = new THREE.Vector2();

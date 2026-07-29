@@ -30,12 +30,21 @@ import { CLOUDS, PRECIPITATION, WEATHER, QUALITY_PRESETS } from '@/config/game';
 import { Throttle } from '@/lib/utils/perf';
 import { clamp, damp } from '@/lib/utils/math';
 
-/** Returns the particle budget multiplier for the current quality preset. */
+/**
+ * Returns the particle budget multiplier for the current quality preset,
+ * clamped to 1.
+ *
+ * Every particle system below allocates its buffers once at full capacity.
+ * A multiplier above 1 would walk off the end of them — and when that happens
+ * inside a `useEffect`, React unmounts the entire tree and the game never
+ * renders at all. The clamp makes that impossible regardless of what a future
+ * edit puts in `QUALITY_PRESETS`.
+ */
 function useParticleBudget(): number {
   const preset = useSettingsStore((s) => s.graphics.preset);
   return useMemo(() => {
     const p = preset === 'custom' ? 'high' : preset;
-    return QUALITY_PRESETS[p]?.maxParticles ?? 1;
+    return Math.min(1, QUALITY_PRESETS[p]?.maxParticles ?? 1);
   }, [preset]);
 }
 
@@ -179,6 +188,9 @@ const _cloudColor = new THREE.Color();
 const _white = new THREE.Color(0xffffff);
 const _upVec = new THREE.Vector3(0, 1, 0);
 
+/** Allocated buffer size for the autumn leaf system. */
+const LEAF_CAPACITY = 420;
+
 /* ───────────────────────────────────────────────────────────────────────────
  * RAIN
  * ─────────────────────────────────────────────────────────────────────────── */
@@ -200,7 +212,10 @@ export function Rain() {
   const budget = useParticleBudget();
 
   const intensity = WEATHER[weather]?.rain ?? 0;
-  const count = Math.floor(PRECIPITATION.RAIN_PARTICLES * budget * intensity);
+  const count = Math.min(
+    PRECIPITATION.RAIN_PARTICLES,
+    Math.floor(PRECIPITATION.RAIN_PARTICLES * budget * intensity),
+  );
 
   const { geometry, material, positions, velocities } = useMemo(() => {
     const maxCount = Math.floor(PRECIPITATION.RAIN_PARTICLES * 1.5);
@@ -333,7 +348,10 @@ export function Snow() {
   // Snow falls in the snow weather state, and lightly all winter.
   const weatherSnow = WEATHER[weather]?.snow ?? 0;
   const intensity = Math.max(weatherSnow, season === 'winter' ? 0.25 : 0);
-  const count = Math.floor(PRECIPITATION.SNOW_PARTICLES * budget * intensity);
+  const count = Math.min(
+    PRECIPITATION.SNOW_PARTICLES,
+    Math.floor(PRECIPITATION.SNOW_PARTICLES * budget * intensity),
+  );
 
   const { geometry, material, data } = useMemo(() => {
     const maxCount = PRECIPITATION.SNOW_PARTICLES;
@@ -454,10 +472,11 @@ export function FallingLeaves() {
 
   const active = season === 'autumn';
   const gusty = weather === 'autumnWind';
-  const count = active ? Math.floor((gusty ? 420 : 160) * budget) : 0;
+  // `LEAF_CAPACITY` is the allocated buffer size; never exceed it.
+  const count = active ? Math.min(LEAF_CAPACITY, Math.floor((gusty ? LEAF_CAPACITY : 160) * budget)) : 0;
 
   const { geometry, material, state } = useMemo(() => {
-    const max = 420;
+    const max = LEAF_CAPACITY;
     const geo = new THREE.PlaneGeometry(0.22, 0.16);
     const mat = new THREE.MeshBasicMaterial({
       color: '#d4802f',
@@ -509,8 +528,10 @@ export function FallingLeaves() {
 
   useEffect(() => {
     const mesh = meshRef.current;
-    if (!mesh || !mesh.instanceColor) return;
-    for (let i = 0; i < count; i++) {
+    if (!mesh) return;
+    // Never index past the pre-built colour table; see `particleBudget`.
+    const n = Math.min(count, state.colors.length);
+    for (let i = 0; i < n; i++) {
       mesh.setColorAt(i, state.colors[i]!);
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;

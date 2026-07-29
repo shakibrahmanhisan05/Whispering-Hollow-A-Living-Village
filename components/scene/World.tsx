@@ -11,7 +11,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef } from 'react';
-
+import { useThree } from '@react-three/fiber';
 import { Physics } from '@react-three/rapier';
 import * as THREE from 'three';
 
@@ -63,6 +63,65 @@ export interface WorldProps {
   input: React.RefObject<InputState>;
   /** False while a menu is open or during the intro flyover. */
   inputEnabled: boolean;
+}
+
+/**
+ * Compiles every material in the scene up front.
+ *
+ * WebGL compiles a shader the first time it is used to draw something. In a
+ * world this varied that means a stall of tens of milliseconds the first time
+ * you round a corner and see a species of tree, a wagon livery or a weather
+ * state you have not seen yet — exactly the dropped frames that make an
+ * otherwise smooth game feel unreliable.
+ *
+ * `compileAsync` walks the graph and builds every program before the player
+ * has control, moving all of that cost into the loading screen where there is
+ * nothing to stutter.
+ */
+function ShaderWarmup() {
+  const { gl, scene, camera } = useThree();
+  const done = useRef(false);
+
+  useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+
+    /* One frame's delay so the scene graph is fully populated — compiling an
+     * empty scene would achieve nothing.
+     *
+     * Synchronous `compile`, not `compileAsync`: the async variant polls
+     * `KHR_parallel_shader_compile` and throws on materials whose programs it
+     * cannot resolve — which the custom `ShaderMaterial`s here trip. Blocking
+     * is fine, because this runs while the loading screen is still up. */
+    const id = window.setTimeout(() => {
+      /* `compile` only walks *visible* objects — and the things most likely to
+       * stall are precisely the ones hidden at load: the train (invisible
+       * until its ritual begins), rain and snow, the fox, the sky lanterns.
+       * Reveal everything for the duration of the compile, then put the
+       * visibility flags back exactly as they were. Nothing is rendered in
+       * between, so this is invisible to the player. */
+      const hidden: THREE.Object3D[] = [];
+      scene.traverse((o) => {
+        if (!o.visible) {
+          hidden.push(o);
+          o.visible = true;
+        }
+      });
+
+      try {
+        gl.compile(scene, camera);
+      } catch (err) {
+        // Warming up is an optimisation; never let it break loading.
+        console.warn('[render] Shader warm-up skipped.', err);
+      } finally {
+        for (const o of hidden) o.visible = false;
+      }
+    }, 120);
+
+    return () => window.clearTimeout(id);
+  }, [gl, scene, camera]);
+
+  return null;
 }
 
 export function World({ terrain, input, inputEnabled }: WorldProps) {
@@ -191,6 +250,8 @@ export function World({ terrain, input, inputEnabled }: WorldProps) {
       {/* ── Systems ─────────────────────────────────────────────────────── */}
       <AmbienceSystem />
       <AdaptiveQuality />
+
+      <ShaderWarmup />
 
       {/* ── Post ────────────────────────────────────────────────────────── */}
       {graphics.preset !== 'potato' && <PostProcessing />}
