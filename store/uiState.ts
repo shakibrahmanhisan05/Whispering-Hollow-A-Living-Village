@@ -138,6 +138,15 @@ export interface UiState {
   photoHideHud: boolean;
   /** Flashes white for a frame when a photo is taken. */
   photoFlash: boolean;
+  /**
+   * True while the player is dragging on the scene to aim the photo camera.
+   *
+   * Photo mode deliberately does *not* hold pointer lock — its own sliders and
+   * buttons would be unclickable if it did. Look control is drag-based
+   * instead, and this flag is what tells the input layer to accumulate mouse
+   * movement despite the pointer being free.
+   */
+  photoDragging: boolean;
 
   /* ── Multiplayer ──────────────────────────────────────────────────────── */
   connectedPlayers: number;
@@ -188,6 +197,7 @@ export const ui = proxy<UiState>({
   photoRoll: 0,
   photoHideHud: true,
   photoFlash: false,
+  photoDragging: false,
 
   connectedPlayers: 0,
   multiplayerStatus: 'off',
@@ -340,6 +350,7 @@ export function resetUiForNewWorld(): void {
   ui.trainCountdown = 0;
   ui.trainActive = false;
   ui.photoFlash = false;
+  ui.photoDragging = false;
   ui.emoteWheelOpen = false;
   ui.selectedEmote = null;
   ui.activeHint = null;

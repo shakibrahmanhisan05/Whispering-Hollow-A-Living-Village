@@ -197,7 +197,11 @@ export function useKeyboard(
     };
 
     const onMouseMove = (e: MouseEvent) => {
-      if (!enabledRef.current || !ui.pointerLocked) return;
+      /* Movement is accumulated when the pointer is locked (normal play) or
+       * while the player is dragging in photo mode, which runs unlocked so its
+       * controls remain clickable. */
+      if (!enabledRef.current) return;
+      if (!ui.pointerLocked && !ui.photoDragging) return;
       /* movementX/Y are already in device pixels of pointer travel. The 0.0022
        * factor converts to radians at sensitivity 1.0 — chosen so a 360° turn
        * takes roughly the same hand movement as most first-person games. */

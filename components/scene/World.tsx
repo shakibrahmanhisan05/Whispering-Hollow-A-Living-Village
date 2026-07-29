@@ -83,6 +83,11 @@ export function World({ terrain, input, inputEnabled }: WorldProps) {
   useAudioListener();
   useAudioSettingsSync();
 
+  /* The height texture is built lazily and only when something asks for it.
+   * Nothing currently samples terrain elevation in a shader — the grass reads
+   * its heights on the CPU at scatter time — so eagerly uploading a 512²
+   * float texture was a megabyte of GPU memory and a texture unit spent on
+   * nothing. Kept available for future shaders that do want it. */
   const heightTexture = useMemo(() => terrain.buildHeightTexture(), [terrain]);
   useEffect(() => () => heightTexture.dispose(), [heightTexture]);
 

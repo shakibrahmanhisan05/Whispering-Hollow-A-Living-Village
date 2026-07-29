@@ -60,8 +60,11 @@ export function PhotoModeCamera({ input }: { input: React.RefObject<InputState> 
     const s = state.current;
     const inp = input.current;
 
-    /* ── Look ───────────────────────────────────────────────────────────── */
-    if (ui.pointerLocked) {
+    /* ── Look ─────────────────────────────────────────────────────────────
+     * Drag to aim. Photo mode runs *without* pointer lock so its sliders and
+     * buttons stay clickable — holding lock here would make the whole control
+     * panel unreachable, which is exactly what it is there for. */
+    if (ui.photoDragging || ui.pointerLocked) {
       const [dx, dy] = consumeMouseDelta(inp);
       s.yaw -= dx;
       s.pitch = clamp(s.pitch - dy, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);

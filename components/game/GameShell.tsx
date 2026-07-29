@@ -29,6 +29,7 @@ import {
   NotePanel,
   EmoteWheel,
   ShopPanel,
+  CharacterOverlay,
 } from '../menu/Panels';
 import { PhotoModeUi } from '../menu/PhotoModeUi';
 import { captureScreenshot } from '../player/PhotoMode';
@@ -71,6 +72,9 @@ export function GameShell() {
 
   const [terrain, setTerrain] = useState<TerrainData | null>(null);
   const [webglSupported, setWebglSupported] = useState(true);
+  const [contextLost, setContextLost] = useState(false);
+  /** True while we are deliberately unmounting the renderer. */
+  const tearingDown = useRef(false);
 
   /* ── Startup ──────────────────────────────────────────────────────────── */
   useEffect(() => {
@@ -222,7 +226,59 @@ export function GameShell() {
     };
   }, [phase, seed, worldMode, avatar.ghostColor]);
 
-  /* ── Pointer lock ─────────────────────────────────────────────────────── */
+  /* ── Pointer lock ─────────────────────────────────────────────────────────
+   * The browser exits pointer lock on Escape and there is no way to intercept
+   * that — but it *also* exits on window blur, alt-tab, a notification, or the
+   * user clicking another monitor. Treating every exit as "open the menu" means
+   * tabbing away for a second dumps the player into Settings when they come
+   * back, which is genuinely irritating.
+   *
+   * So we record intent: a real Escape keypress sets a short-lived flag, and
+   * only an unlock that follows it opens Settings. Every other unlock simply
+   * shows the existing "Click to look around" overlay. */
+  const escapeIntent = useRef(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Escape') return;
+      escapeIntent.current = true;
+      // The flag only needs to survive until the pointerlockchange event fires,
+      // which is the same tick. Clearing it quickly stops a stale Escape from
+      // hijacking an unrelated unlock later on.
+      window.setTimeout(() => {
+        escapeIntent.current = false;
+      }, 400);
+
+      /* When pointer lock is *not* held, no unlock event will ever arrive — so
+       * Escape has to act directly, or there is no keyboard route out of a
+       * panel or out of photo mode once the player has clicked away. */
+      if (!document.pointerLockElement) {
+        const current = useGameStore.getState().phase;
+
+        // Photo mode: Escape leaves it. Universally expected.
+        if (current === 'photo') {
+          setPhase('playing');
+          ui.photoHideHud = true;
+          ui.photoDragging = false;
+          return;
+        }
+
+        if (current === 'playing' || current === 'seated' || current === 'paused') {
+          if (ui.activePanel === null) {
+            setPhase('paused');
+            ui.activePanel = 'settings';
+          } else {
+            closePanel();
+            if (current === 'paused') setPhase('playing');
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setPhase]);
+
   const pointerLock = usePointerLock(
     // Locked: close any panel and resume play.
     useCallback(() => {
@@ -231,13 +287,18 @@ export function GameShell() {
       if (current === 'paused') setPhase('playing');
       void getSynthEngine().init();
     }, [setPhase]),
-    // Unlocked (Escape, alt-tab, …): pause and open settings.
+    // Unlocked: only open Settings if the player actually asked for it.
     useCallback(() => {
       const current = useGameStore.getState().phase;
-      if (current === 'playing' || current === 'seated') {
+      if (current !== 'playing' && current !== 'seated') return;
+
+      if (escapeIntent.current) {
+        escapeIntent.current = false;
         setPhase('paused');
         ui.activePanel = 'settings';
       }
+      // Otherwise: stay in 'playing'. `ui.pointerLocked` is already false, so
+      // the ClickToPlay overlay appears and the player resumes with one click.
     }, [setPhase]),
   );
 
@@ -252,9 +313,14 @@ export function GameShell() {
           if (current === 'photo') {
             setPhase('playing');
             ui.photoHideHud = true;
+            ui.photoDragging = false;
           } else if (current === 'playing' || current === 'seated') {
             setPhase('photo');
             ui.photoHideHud = false;
+            /* Hand the cursor back. Photo mode's whole interface is sliders
+             * and buttons; keeping pointer lock would leave every one of them
+             * unclickable. Aiming is drag-based instead. */
+            pointerLock.release();
           }
           break;
 
@@ -303,6 +369,23 @@ export function GameShell() {
   const inputEnabled = phase === 'playing' || phase === 'photo' || phase === 'seated';
   const input = useKeyboard(handleEdgeAction, inputEnabled && snap.activePanel === null);
 
+  /* Ending a photo-mode drag has to be watched on the window, not the canvas —
+   * the player will frequently release the button after dragging off the edge
+   * of the viewport, and a canvas-scoped listener never sees that. */
+  useEffect(() => {
+    const endDrag = () => {
+      ui.photoDragging = false;
+    };
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+    window.addEventListener('blur', endDrag);
+    return () => {
+      window.removeEventListener('pointerup', endDrag);
+      window.removeEventListener('pointercancel', endDrag);
+      window.removeEventListener('blur', endDrag);
+    };
+  }, []);
+
   /* ── Screenshot capture ───────────────────────────────────────────────── */
   const captureRef = useRef<(() => void) | null>(null);
 
@@ -316,6 +399,10 @@ export function GameShell() {
 
   if (!webglSupported) {
     return <WebGlUnsupported />;
+  }
+
+  if (contextLost) {
+    return <ContextLost />;
   }
 
   return (
@@ -342,9 +429,35 @@ export function GameShell() {
           onCreated={({ gl }) => {
             gl.toneMapping = THREE.ACESFilmicToneMapping;
             gl.toneMappingExposure = graphics.exposure;
+
+            /* A lost context leaves a permanently black canvas — three cannot
+             * recover one, and every texture, buffer and program has to be
+             * rebuilt from scratch. Rather than let the player stare at
+             * nothing, surface it and offer a reload. Usually caused by the
+             * GPU being reclaimed (driver update, laptop sleeping) or by
+             * running out of video memory. */
+            gl.domElement.addEventListener(
+              'webglcontextlost',
+              (event) => {
+                event.preventDefault();
+                /* Leaving the valley unmounts the Canvas, and three's own
+                 * dispose calls `forceContextLoss()` — which fires this exact
+                 * event. Without the guard, returning to the menu would throw
+                 * up a "the valley slipped away" error screen every time. */
+                if (tearingDown.current) return;
+                console.warn('[render] WebGL context lost.');
+                setContextLost(true);
+              },
+              { once: true },
+            );
           }}
           onPointerDown={() => {
-            if (phase === 'playing' || phase === 'photo' || phase === 'seated') {
+            if (phase === 'photo') {
+              // Drag-to-aim; released by the window-level pointerup below.
+              ui.photoDragging = true;
+              return;
+            }
+            if (phase === 'playing' || phase === 'seated') {
               if (!ui.pointerLocked && ui.activePanel === null) pointerLock.request();
             }
           }}
@@ -389,6 +502,7 @@ export function GameShell() {
             }}
           />
         )}
+        {snap.activePanel === 'character' && <CharacterOverlay key="character" />}
         {snap.activePanel === 'achievements' && <AchievementsPanel key="achievements" />}
         {snap.activePanel === 'gallery' && <GalleryPanel key="gallery" />}
         {snap.activePanel === 'journal' && <JournalPanel key="journal" />}
@@ -417,9 +531,14 @@ export function GameShell() {
         <button
           type="button"
           onClick={() => {
+            tearingDown.current = true;
             leavePresence();
             setTerrain(null);
             returnToMenu();
+            // Re-arm once React has finished unmounting the canvas.
+            window.setTimeout(() => {
+              tearingDown.current = false;
+            }, 1500);
           }}
           className="fixed bottom-5 left-5 z-[130] rounded-lg border border-hollow-600/50 bg-hollow-900/85 px-3.5 py-2 text-xs text-hollow-300 backdrop-blur transition-colors hover:border-poppy/60 hover:text-poppy"
         >
@@ -508,6 +627,35 @@ function ClickToPlay({ onClick }: { onClick: () => void }) {
         Click to look around
       </span>
     </button>
+  );
+}
+
+/** Shown when the GPU has taken the WebGL context away. */
+function ContextLost() {
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-hollow-950 p-8">
+      <div className="glass max-w-md rounded-panel p-8 text-center">
+        <div className="mb-4 text-4xl">🌫️</div>
+        <h1 className="mb-3 font-display text-2xl tracking-wide text-amber-soft">
+          The valley slipped away
+        </h1>
+        <p className="mb-5 text-sm leading-relaxed text-hollow-300">
+          The browser lost its connection to your graphics card. This usually means the GPU was
+          reclaimed by the system, or the scene ran out of video memory.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-lg bg-gradient-to-b from-amber-glow to-amber-deep px-5 py-2.5 text-sm font-semibold text-hollow-950 transition-all hover:brightness-110"
+        >
+          Reload
+        </button>
+        <p className="mt-5 text-xs leading-relaxed text-hollow-500">
+          If it keeps happening, lower <strong>Settings → Graphics → Preset</strong> to Medium or
+          Low. Your progress is saved.
+        </p>
+      </div>
+    </div>
   );
 }
 

@@ -43,6 +43,7 @@ uniform float uRippleWavelength;
 uniform vec3  uCameraPos;
 uniform float uFadeStart;
 uniform float uFadeEnd;
+uniform float uNearFade;
 uniform vec3  uBaseColor;
 uniform vec3  uTipColor;
 uniform float uSnowCoverage;
@@ -117,6 +118,16 @@ void main() {
    * alpha-test path and costs no sorting. */
   float dist = distance(uCameraPos.xz, aOffset.xz);
   vFade = 1.0 - smoothstep(uFadeStart, uFadeEnd, dist);
+
+  /* ── Near fade ────────────────────────────────────────────────────────────
+   * Blades right against the lens are shrunk away too. A first-person camera
+   * standing in a field otherwise ends up with several blades spanning the
+   * whole screen, which reads as being stuck inside a bush. Real eyes don't
+   * focus at 20 cm either. Fading over the last 85 cm is invisible in motion
+   * and removes the problem entirely. */
+  float near = distance(uCameraPos, aOffset);
+  vFade *= smoothstep(uNearFade * 0.35, uNearFade, near);
+
   worldPos = mix(aOffset, worldPos, vFade);
 
   gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);

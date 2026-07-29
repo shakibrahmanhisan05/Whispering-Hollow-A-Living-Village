@@ -175,7 +175,12 @@ export function PostProcessing() {
         // anything merely white.
         frameBufferType={THREE.HalfFloatType}
         multisampling={0}
-        enableNormalPass={graphics.ssao}
+        /* No normal pass. N8AO reconstructs normals from the depth buffer, so
+         * the extra full-resolution RGBA half-float normal target it would
+         * allocate buys nothing — and on a 1440p display that target alone is
+         * tens of megabytes of the video memory budget that a lost context is
+         * measured against. */
+        enableNormalPass={false}
       >
         {/* 1. Ambient occlusion. N8AO is used rather than the classic SSAO
             effect: it is both faster and far less prone to the halo artefacts
@@ -187,7 +192,10 @@ export function PostProcessing() {
             distanceFalloff={1.2}
             quality={graphics.preset === 'cinematic' ? 'high' : 'medium'}
             color="#0a1418"
-            halfRes={graphics.preset !== 'cinematic'}
+            /* Always half resolution. AO is a low-frequency signal — it is a
+             * soft darkening in creases — so the full-res buffer is spent on
+             * detail nobody can see, at four times the memory. */
+            halfRes
           />
         ) : (
           <></>
@@ -229,6 +237,11 @@ export function PostProcessing() {
             focusDistance={POSTFX.DOF.focusDistance}
             focalLength={POSTFX.DOF.focalLength}
             bokehScale={dofBlur.current}
+            /* Depth of field is by far the most memory-hungry effect in the
+             * chain — it needs a circle-of-confusion target plus near and far
+             * bokeh buffers. Running it at 480p and letting the upscale blur
+             * it is not a compromise: the output is blurred by definition. */
+            width={854}
             height={480}
           />
         ) : (

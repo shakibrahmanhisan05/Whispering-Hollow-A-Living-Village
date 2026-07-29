@@ -144,18 +144,44 @@ export const VEGETATION = {
   /** Trees are not placed on terrain steeper than this. */
   MAX_TREE_SLOPE: 0.62,
 
-  /** Grass blades per chunk, multiplied by the quality density factor. */
-  GRASS_BLADES_PER_CHUNK: 9000,
+  /**
+   * Buffer capacity per grass chunk.
+   *
+   * This is the *allocation* size, not the draw count. Chunk buffers are
+   * allocated once at this capacity and never resized; changing the quality
+   * preset only varies `instanceCount`. Reallocating the whole pool on every
+   * density change used to spike GPU memory hard enough to lose the WebGL
+   * context outright (`GL_OUT_OF_MEMORY` on D3D11) when the player switched
+   * presets mid-session.
+   *
+   * 81 chunks × 10 000 blades × 40 bytes ≈ 32 MB, constant.
+   */
+  GRASS_BLADES_PER_CHUNK: 10000,
   /** Grass is instanced in square chunks of this edge length. */
   GRASS_CHUNK_SIZE: 20,
   /** Radius in chunks around the player that stays populated with grass. */
-  GRASS_CHUNK_RADIUS: 6,
-  /** Height of a grass blade before per-instance jitter. */
-  GRASS_BLADE_HEIGHT: 1.15,
-  /** Width of a grass blade at its base. */
-  GRASS_BLADE_WIDTH: 0.085,
+  GRASS_CHUNK_RADIUS: 4,
+  /**
+   * Height of a grass blade before per-instance jitter, in metres.
+   * With the ±35 % jitter applied this tops out around 1.05 m against a
+   * 1.68 m eye height — thigh-to-waist high, which is what "meadow" looks
+   * like. Taller than this and the player is wading through it.
+   */
+  GRASS_BLADE_HEIGHT: 0.78,
+  /**
+   * Width of a grass blade at its base, in metres.
+   * Real grass is 3–6 mm across. 3 cm is already a generous stylisation that
+   * keeps blades readable at distance; anything wider reads as reeds.
+   */
+  GRASS_BLADE_WIDTH: 0.03,
   /** Segments per blade — more segments = smoother bend under wind. */
   GRASS_BLADE_SEGMENTS: 4,
+  /**
+   * Blades closer than this to the camera shrink away.
+   * Without it, standing still plants a dozen blades directly across the lens
+   * and the player appears to be inside a bush rather than standing in a field.
+   */
+  GRASS_NEAR_FADE: 0.85,
 
   /** Flower instances scattered through the meadow zone. */
   FLOWER_COUNT: 2600,
@@ -918,8 +944,16 @@ export const PERFORMANCE = {
   LOW_PRIORITY_HZ: 10,
   /** Spatial hash cell size used for instance culling and obstacle lookup. */
   SPATIAL_HASH_CELL: 16,
-  /** Hard cap on device pixel ratio regardless of resolution scale. */
-  MAX_DPR: 2,
+  /**
+   * Hard cap on device pixel ratio regardless of resolution scale.
+   *
+   * 1.5, not 2. The postprocessing chain allocates roughly a dozen half-float
+   * render targets at the drawing-buffer size; at DPR 2 on a 1440p display
+   * that is four times the pixels of DPR 1 and several hundred megabytes of
+   * GPU memory, which is enough to lose the context on modest hardware. The
+   * visual difference between 1.5 and 2 with SMAA enabled is very hard to see.
+   */
+  MAX_DPR: 1.5,
 } as const;
 
 /* ───────────────────────────────────────────────────────────────────────────

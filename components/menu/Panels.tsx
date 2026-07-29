@@ -13,6 +13,7 @@ import { motion } from 'framer-motion';
 import { X, Lock, Trash2, Download, Globe2, Coins } from 'lucide-react';
 
 import { Button, ScrollArea, Separator } from '../ui/primitives';
+import { CharacterPanel } from './CharacterPanel';
 import { ui, closePanel, pushToast } from '@/store/uiState';
 import { useGameStore } from '@/store/gameStore';
 import { broadcastEmote } from '@/lib/rtdb';
@@ -376,6 +377,29 @@ export function CodexPanel() {
           );
         })}
       </div>
+    </PanelShell>
+  );
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * CHARACTER
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The character panel as a standalone overlay, opened with Tab.
+ *
+ * The same {@link CharacterPanel} body also appears as a tab inside Settings.
+ * Sharing the component rather than duplicating it means avatar options can
+ * only ever be defined once.
+ */
+export function CharacterOverlay() {
+  const coins = useGameStore((s) => s.progress.coins);
+  return (
+    <PanelShell
+      title="Character"
+      subtitle={`Tab to close · ${coins} coin${coins === 1 ? '' : 's'}`}
+    >
+      <CharacterPanel />
     </PanelShell>
   );
 }

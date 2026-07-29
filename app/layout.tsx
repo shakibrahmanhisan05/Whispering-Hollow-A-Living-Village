@@ -5,11 +5,10 @@
  */
 
 import type { Metadata, Viewport } from 'next';
-import { Analytics } from '@vercel/analytics/react';
-
 import './globals.css';
 import { TelemetryProvider } from '@/components/system/TelemetryProvider';
 import { ServiceWorkerRegistrar } from '@/components/system/ServiceWorkerRegistrar';
+import { AnalyticsGate } from '@/components/system/AnalyticsGate';
 
 export const metadata: Metadata = {
   title: 'Whispering Hollow — A Living Village',
@@ -54,14 +53,12 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const analyticsEnabled = process.env.NEXT_PUBLIC_ENABLE_ANALYTICS !== 'false';
-
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
         <TelemetryProvider>{children}</TelemetryProvider>
         <ServiceWorkerRegistrar />
-        {analyticsEnabled && <Analytics />}
+        <AnalyticsGate />
       </body>
     </html>
   );

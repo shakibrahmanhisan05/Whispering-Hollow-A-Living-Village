@@ -20,7 +20,7 @@ import {
 import { getLayoutSnapshot, RAIL_QUERY, POND, RIDGE, railHeightAt } from '../lib/world/layout';
 import { buildTree, TREE_SPECIES } from '../lib/geometry/trees';
 import { createRng, blueNoise, RandomSource } from '../lib/utils/random';
-import { WORLD, TERRAIN_NOISE, ZONES, VEGETATION } from '../config/game';
+import { WORLD, TERRAIN_NOISE, VEGETATION } from '../config/game';
 
 let failures = 0;
 let checks = 0;

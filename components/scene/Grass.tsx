@@ -90,7 +90,15 @@ export function Grass() {
 
   const groupRef = useRef<THREE.Group>(null);
 
-  const bladesPerChunk = Math.floor(VEGETATION.GRASS_BLADES_PER_CHUNK * density);
+  /* ── Fixed-capacity pool ─────────────────────────────────────────────────
+   * `capacity` is what we allocate; `bladesPerChunk` is what we *draw*.
+   * Keeping the allocation constant means changing the quality preset costs a
+   * single `instanceCount` write per chunk instead of tearing down and
+   * rebuilding 81 geometries and ~500 GPU buffers. The old behaviour spiked
+   * GPU memory hard enough to trigger `GL_OUT_OF_MEMORY` and lose the WebGL
+   * context when switching presets mid-session. */
+  const capacity = VEGETATION.GRASS_BLADES_PER_CHUNK;
+  const bladesPerChunk = Math.min(capacity, Math.floor(capacity * density));
   const chunkRadius = VEGETATION.GRASS_CHUNK_RADIUS;
   const chunkSize = VEGETATION.GRASS_CHUNK_SIZE;
 
@@ -115,6 +123,7 @@ export function Grass() {
         uCameraPos: { value: new THREE.Vector3() },
         uFadeStart: { value: chunkRadius * chunkSize * 0.55 },
         uFadeEnd: { value: chunkRadius * chunkSize * 0.95 },
+        uNearFade: { value: VEGETATION.GRASS_NEAR_FADE },
         uBaseColor: { value: new THREE.Color('#2c4a1c') },
         uTipColor: { value: new THREE.Color('#7fb04a') },
         uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
@@ -229,9 +238,9 @@ export function Grass() {
     };
   }, [bladesPerChunk, chunkSize, terrain]);
 
-  /* Allocate the pool once. */
+  /* Allocate the pool once, at fixed capacity, independent of quality. */
   useEffect(() => {
-    if (bladesPerChunk <= 0) {
+    if (capacity <= 0) {
       chunks.current = [];
       return;
     }
@@ -243,15 +252,12 @@ export function Grass() {
       geo.attributes.position = baseGeometry.attributes.position!;
       geo.attributes.uv = baseGeometry.attributes.uv!;
 
-      const offset = new THREE.InstancedBufferAttribute(new Float32Array(bladesPerChunk * 3), 3);
-      const rotation = new THREE.InstancedBufferAttribute(new Float32Array(bladesPerChunk), 1);
-      const scale = new THREE.InstancedBufferAttribute(new Float32Array(bladesPerChunk), 1);
-      const phase = new THREE.InstancedBufferAttribute(new Float32Array(bladesPerChunk), 1);
-      const colorJitter = new THREE.InstancedBufferAttribute(
-        new Float32Array(bladesPerChunk * 3),
-        3,
-      );
-      const bend = new THREE.InstancedBufferAttribute(new Float32Array(bladesPerChunk), 1);
+      const offset = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+      const rotation = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+      const scale = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+      const phase = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+      const colorJitter = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+      const bend = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
 
       /* `setUsage(DynamicDrawUsage)` tells the driver these buffers change, so
        * it picks a memory pool suited to frequent re-upload. Without it, every
@@ -309,7 +315,20 @@ export function Grass() {
       for (const chunk of pool) chunk.geometry.dispose();
       group?.clear();
     };
-  }, [bladesPerChunk, totalChunks, baseGeometry, material, chunkSize]);
+    /* Deliberately NOT dependent on `bladesPerChunk`. The pool is allocated at
+     * fixed capacity, so a quality change must not tear it down and rebuild
+     * it — that reallocation is what used to exhaust GPU memory. Density is
+     * applied per-chunk via `instanceCount` in the streaming pass below. */
+  }, [capacity, totalChunks, baseGeometry, material, chunkSize]);
+
+  /* Re-fill every chunk when the density setting changes, so more (or fewer)
+   * blades appear immediately rather than only as chunks recycle. */
+  useEffect(() => {
+    for (const chunk of chunks.current) {
+      if (chunk.cx === 99999) continue;
+      populateChunk(chunk, chunk.cx, chunk.cz);
+    }
+  }, [bladesPerChunk, populateChunk]);
 
   /* ── Streaming + uniform sync ─────────────────────────────────────────── */
   useFrame(({ camera }, dt) => {
@@ -328,7 +347,7 @@ export function Grass() {
     u.uBaseColor.value.setRGB(tr * 0.45, tg * 0.5, tb * 0.42);
     u.uSnowCoverage.value += (s.snowCoverage - u.uSnowCoverage.value) * Math.min(dt * 2, 0.1);
 
-    if (chunks.current.length === 0) return;
+    if (chunks.current.length === 0 || bladesPerChunk <= 0) return;
 
     /* Recycle chunks when the player crosses a boundary. Only the chunks that
      * have fallen outside the window are re-populated — typically one row or
@@ -366,7 +385,10 @@ export function Grass() {
     }
   });
 
-  if (bladesPerChunk <= 0) return null;
+  /* The group always mounts, even at zero density — unmounting it would
+   * destroy the pool and reallocating it on the way back is exactly the
+   * churn this design exists to avoid. At zero density every chunk simply
+   * draws nothing. */
   return <group ref={groupRef} name="grass" />;
 }
 

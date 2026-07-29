@@ -130,7 +130,8 @@ export function PhotoModeUi({ onCapture, onExit }: { onCapture: () => void; onEx
           </div>
 
           <p className="mt-2.5 text-center text-[0.62rem] text-hollow-500">
-            WASD to fly · Space / Ctrl for up and down · Shift to move faster · Scroll to zoom
+            Drag the scene to aim · WASD to fly · Space / Ctrl for up and down · Shift to move
+            faster · Scroll to zoom
           </p>
         </motion.div>
       )}
